@@ -1,0 +1,100 @@
+<svg viewBox="0 0 900 640" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#555555"/>
+    </marker>
+  </defs>
+
+  <rect width="900" height="640" fill="#ffffff"/>
+  <text x="450" y="34" text-anchor="middle" font-size="22" font-weight="bold" fill="#c25a00">PurrSync — System Architecture</text>
+
+  <!-- Presentation Layer -->
+  <rect x="40" y="70" width="820" height="120" rx="10" fill="#fff3e6" stroke="#f0a35f" stroke-width="1.5"/>
+  <text x="60" y="94" font-size="14" font-weight="bold" fill="#c25a00">Presentation Layer (Flutter UI)</text>
+  <g font-size="12" fill="#333333">
+    <rect x="60" y="106" width="140" height="60" rx="6" fill="#ffffff" stroke="#e2a878"/>
+    <text x="130" y="132" text-anchor="middle">Login / Register</text>
+    <text x="130" y="150" text-anchor="middle" font-size="10" fill="#777">screens/auth/</text>
+
+    <rect x="220" y="106" width="140" height="60" rx="6" fill="#ffffff" stroke="#e2a878"/>
+    <text x="290" y="132" text-anchor="middle">Home (List +</text>
+    <text x="290" y="146" text-anchor="middle">Search / Dashboard)</text>
+    <text x="290" y="160" text-anchor="middle" font-size="10" fill="#777">home_screen.dart</text>
+
+    <rect x="380" y="106" width="140" height="60" rx="6" fill="#ffffff" stroke="#e2a878"/>
+    <text x="450" y="132" text-anchor="middle">Add / Edit / Delete</text>
+    <text x="450" y="146" text-anchor="middle">Cat Profile</text>
+    <text x="450" y="160" text-anchor="middle" font-size="10" fill="#777">add_cat, cat_detail</text>
+
+    <rect x="540" y="106" width="140" height="60" rx="6" fill="#ffffff" stroke="#e2a878"/>
+    <text x="610" y="132" text-anchor="middle">Vaccines / Weight /</text>
+    <text x="610" y="146" text-anchor="middle">Vet Visits Tabs</text>
+    <text x="610" y="160" text-anchor="middle" font-size="10" fill="#777">cat_detail_screen.dart</text>
+
+    <rect x="700" y="106" width="140" height="60" rx="6" fill="#ffffff" stroke="#e2a878"/>
+    <text x="770" y="132" text-anchor="middle">QR Health Card /</text>
+    <text x="770" y="146" text-anchor="middle">API Test Console</text>
+    <text x="770" y="160" text-anchor="middle" font-size="10" fill="#777">qr_health_card, api_test</text>
+  </g>
+
+  <!-- Arrow down -->
+  <line x1="450" y1="190" x2="450" y2="222" stroke="#555555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Service / Logic Layer -->
+  <rect x="40" y="224" width="820" height="130" rx="10" fill="#eaf3ff" stroke="#7fb0e6" stroke-width="1.5"/>
+  <text x="60" y="248" font-size="14" font-weight="bold" fill="#1b5faa">Service Layer (Business Logic)</text>
+  <g font-size="12" fill="#333333">
+    <rect x="70" y="262" width="230" height="76" rx="6" fill="#ffffff" stroke="#a9cbef"/>
+    <text x="185" y="286" text-anchor="middle" font-weight="bold">FirebaseService</text>
+    <text x="185" y="302" text-anchor="middle" font-size="10.5">Firebase SDK wrapper —</text>
+    <text x="185" y="316" text-anchor="middle" font-size="10.5">Auth + Firestore CRUD,</text>
+    <text x="185" y="330" text-anchor="middle" font-size="10.5">throws AppException on failure</text>
+
+    <rect x="330" y="262" width="230" height="76" rx="6" fill="#ffffff" stroke="#a9cbef"/>
+    <text x="445" y="286" text-anchor="middle" font-weight="bold">ApiService</text>
+    <text x="445" y="302" text-anchor="middle" font-size="10.5">Raw HTTPS client —</text>
+    <text x="445" y="316" text-anchor="middle" font-size="10.5">GET / POST / PATCH / DELETE</text>
+    <text x="445" y="330" text-anchor="middle" font-size="10.5">against Firestore REST API</text>
+
+    <rect x="590" y="262" width="230" height="76" rx="6" fill="#ffffff" stroke="#a9cbef"/>
+    <text x="705" y="286" text-anchor="middle" font-weight="bold">NotificationService</text>
+    <text x="705" y="302" text-anchor="middle" font-size="10.5">Local device notifications</text>
+    <text x="705" y="316" text-anchor="middle" font-size="10.5">for upcoming vaccine</text>
+    <text x="705" y="330" text-anchor="middle" font-size="10.5">due dates</text>
+  </g>
+
+  <!-- Arrows down to data layer -->
+  <line x1="185" y1="338" x2="185" y2="376" stroke="#555555" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="445" y1="338" x2="445" y2="376" stroke="#555555" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="705" y1="338" x2="705" y2="416" stroke="#555555" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Data / Backend Layer -->
+  <rect x="40" y="378" width="560" height="130" rx="10" fill="#eafaf0" stroke="#7fcf9e" stroke-width="1.5"/>
+  <text x="60" y="402" font-size="14" font-weight="bold" fill="#177a3f">Firebase Backend (Google Cloud)</text>
+  <g font-size="12" fill="#333333">
+    <rect x="70" y="416" width="230" height="76" rx="6" fill="#ffffff" stroke="#9fd9b8"/>
+    <text x="185" y="440" text-anchor="middle" font-weight="bold">Firebase Authentication</text>
+    <text x="185" y="458" text-anchor="middle" font-size="10.5">Email / password sign-in,</text>
+    <text x="185" y="472" text-anchor="middle" font-size="10.5">issues ID tokens</text>
+
+    <rect x="330" y="416" width="230" height="76" rx="6" fill="#ffffff" stroke="#9fd9b8"/>
+    <text x="445" y="440" text-anchor="middle" font-weight="bold">Cloud Firestore</text>
+    <text x="445" y="458" text-anchor="middle" font-size="10.5">SDK access (offline-cached) +</text>
+    <text x="445" y="472" text-anchor="middle" font-size="10.5">REST API access (HTTPS)</text>
+  </g>
+
+  <!-- On-device layer -->
+  <rect x="620" y="378" width="240" height="130" rx="10" fill="#fbeef0" stroke="#e6a9b4" stroke-width="1.5"/>
+  <text x="638" y="402" font-size="14" font-weight="bold" fill="#a52142">On-Device</text>
+  <rect x="638" y="416" width="204" height="76" rx="6" fill="#ffffff" stroke="#e6bcc4"/>
+  <text x="740" y="440" text-anchor="middle" font-weight="bold" font-size="12">flutter_local_notifications</text>
+  <text x="740" y="458" text-anchor="middle" font-size="10.5">Vaccine reminder alarms</text>
+  <text x="740" y="472" text-anchor="middle" font-size="10.5">scheduled per device timezone</text>
+
+  <!-- Firestore collections summary -->
+  <line x1="445" y1="492" x2="445" y2="524" stroke="#555555" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="120" y="526" width="650" height="90" rx="10" fill="#fdf6e3" stroke="#e0c46c" stroke-width="1.5"/>
+  <text x="140" y="550" font-size="13" font-weight="bold" fill="#8a6d00">Firestore Collections</text>
+  <text x="140" y="572" font-size="11.5" fill="#333">users • cats • weight_logs • vaccines • vet_visits • api_test_logs</text>
+  <text x="140" y="592" font-size="10.5" fill="#777">See Database Design (05_Database_Design.md) for full field-level schema and relationships.</text>
+</svg>

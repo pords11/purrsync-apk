@@ -1,0 +1,680 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Application: PurrSync (Project: purrsync-42b2c)
+//
+// Collection: users/{uid}
+// Document ID: Firebase Auth UID
+// Fields:
+//   - id: string (required, immutable) - Auth UID
+//   - email: string (required) - User email address
+//   - fullName: string (required, 1..100 chars) - Full name
+//   - role: string (required, immutable on update) - 'owner', 'vet', or 'clinic'
+//   - createdAt: timestamp (required, immutable) - Creation timestamp
+//
+// Collection: providers/{uid}
+// Document ID: Firebase Auth UID of the Vet or Clinic
+// Fields:
+//   - role: string (required, immutable on update) - 'vet' or 'clinic'
+//   - displayName: string (required, 1..100 chars) - Practice or doctor display name
+//   - address: string (required, 0..200 chars) - Street address
+//   - city: string (required, 0..100 chars) - City
+//   - phone: string (required, 0..30 chars) - Contact telephone
+//   - bio: string (optional, 0..1000 chars) - Biography / description
+//   - specialty: string (optional, 0..100 chars) - Medical specialty
+//   - visitTypes: list of strings (optional, <= 20 items, <= 50 chars each)
+//   - openingHours: string (optional, legacy fallback, 0..100 chars)
+//   - openTime: string (optional, 0..10 chars, format 'HH:mm')
+//   - closeTime: string (optional, 0..10 chars, format 'HH:mm')
+//   - openDays: list of numbers (optional, <= 7 items, 1..7)
+//   - hoursLabel: string (optional, 0..150 chars)
+//   - active: bool (required) - Whether provider listing is currently active
+//   - createdAt: timestamp (required, immutable) - Creation timestamp
+//   - updatedAt: timestamp (optional) - Last updated timestamp
+//
+// Collection: cats/{catId}
+// Document ID: Auto-generated string
+// Fields:
+//   - id: string (optional) - Document ID
+//   - userId: string (required, immutable) - Owner UID
+//   - name: string (required, 1..100 chars) - Cat's name
+//   - breed: string (optional, 0..100 chars) - Cat's breed
+//   - weight: number (required, 0.01..100.0) - Weight in kg
+//   - birthDate: timestamp (optional/nullable) - Cat's birth date
+//   - imageBase64: string (optional, 0..500000 chars) - Embedded photo
+//   - imageUrl: string (optional, 0..500000 chars) - Photo URL / legacy base64
+//   - diet: map (optional) - Diet snapshot
+//   - vaccine: map (optional) - Vaccine snapshot
+//   - createdAt / timestamp: timestamp (optional, immutable)
+//   - updatedAt: timestamp (optional)
+//
+// Collection: weight_logs/{logId}
+// Document ID: Auto or timestamp-generated string
+// Fields:
+//   - id: string (optional)
+//   - catId: string (optional, 1..100 chars) - FK -> cats
+//   - userId: string (optional, 1..128 chars) - FK -> users (owner)
+//   - weight: number (required, 0.01..100.0) - Logged weight in kg
+//   - date: timestamp (required) - Date of weigh-in
+//   - notes: string (optional, 0..500 chars) - Observation notes
+//
+// Collection: vaccines/{vaccineId}
+// Document ID: Auto or timestamp-generated string
+// Fields:
+//   - id: string (optional)
+//   - catId: string (optional, 1..100 chars) - FK -> cats
+//   - userId: string (optional, 1..128 chars) - FK -> users (owner)
+//   - type: string (required, 1..100 chars) - Vaccine type / brand
+//   - dateGiven: timestamp (required) - Administration timestamp
+//   - nextDueDate: timestamp (required) - Next required booster timestamp
+//   - clinicName: string (optional, 0..150 chars) - Administering clinic
+//   - veterinarian: string (optional, 0..150 chars) - Doctor name
+//   - notes: string (optional, 0..1000 chars) - Vaccine notes
+//
+// Collection: vet_visits/{visitId}
+// Document ID: Auto or timestamp-generated string
+// Fields:
+//   - id: string (optional)
+//   - catId: string (optional, 1..100 chars) - FK -> cats
+//   - userId: string (optional, 1..128 chars) - FK -> users (owner)
+//   - visitDate: timestamp (required) - Date of medical consultation
+//   - clinicName: string (required, 1..150 chars) - Clinic or hospital name
+//   - reason: string (required, 1..500 chars) - Visit reason / chief complaint
+//   - diagnosis: string (required, 1..1000 chars) - Clinical diagnosis
+//   - prescribedMedicine: string (optional, 0..1000 chars) - Prescriptions
+//   - followUpDate: timestamp (optional/nullable) - Recommended next visit
+//
+// Collection: services/{serviceId}
+// Document ID: Auto-generated string
+// Fields:
+//   - id: string (optional)
+//   - providerId: string (required, immutable) - UID of offering clinic/vet
+//   - providerName: string (required, 0..100 chars) - Provider display name
+//   - name: string (required, 1..100 chars) - Service title
+//   - description: string (optional, 0..1000 chars) - Detailed description
+//   - category: string (required, 0..50 chars) - Category tag
+//   - price: number (required, 0.0..100000.0) - Price in PHP
+//   - durationMinutes: number (required, 1..1440) - Estimated duration in minutes
+//   - active: bool (required) - Availability toggle
+//   - createdAt: timestamp (required, immutable) - Creation timestamp
+//   - updatedAt: timestamp (optional) - Update timestamp
+//
+// Collection: reservations/{resId}
+// Document ID: Auto-generated string
+// Fields:
+//   - id: string (optional)
+//   - ownerId: string (required, immutable) - UID of pet owner
+//   - ownerName: string (optional, 0..100 chars) - Owner name
+//   - catId: string (required, immutable, 0..100 chars) - Cat ID
+//   - catName: string (optional, 0..100 chars) - Cat name
+//   - catBreed: string (optional, 0..100 chars) - Cat breed
+//   - vetId: string (required, immutable, 0..128 chars) - UID of assigned vet
+//   - vetName: string (optional, 0..100 chars) - Vet name
+//   - visitType: string (optional, 0..50 chars) - Consultation type
+//   - requestedAt: timestamp (required) - Requested appointment time
+//   - notes: string (optional, 0..1000 chars) - Owner concerns
+//   - status: string (required) - 'pending', 'accepted', 'declined', 'cancelled', 'completed'
+//   - providerNote: string (optional/nullable, 0..1000 chars) - Feedback from vet
+//   - createdAt: timestamp (required, immutable) - Creation timestamp
+//   - updatedAt: timestamp (optional) - Update timestamp
+//
+// Collection: bookings/{bookId}
+// Document ID: Auto-generated string
+// Fields:
+//   - id: string (optional)
+//   - ownerId: string (required, immutable) - UID of pet owner
+//   - ownerName: string (optional, 0..100 chars) - Owner name
+//   - catId: string (required, immutable, 0..100 chars) - Cat ID
+//   - catName: string (optional, 0..100 chars) - Cat name
+//   - catBreed: string (optional, 0..100 chars) - Cat breed
+//   - clinicId: string (required, immutable, 0..128 chars) - UID of clinic
+//   - clinicName: string (optional, 0..100 chars) - Clinic name
+//   - serviceId: string (required, 0..100 chars) - Selected service ID
+//   - serviceName: string (optional, 0..100 chars) - Service name
+//   - servicePrice: number (optional, 0.0..100000.0) - Booked service price
+//   - serviceDurationMinutes: number (optional, 1..1440) - Service duration
+//   - scheduledAt: timestamp (required) - Scheduled appointment time
+//   - notes: string (optional, 0..1000 chars) - Special instructions
+//   - status: string (required) - 'pending', 'accepted', 'declined', 'cancelled', 'completed'
+//   - providerNote: string (optional/nullable, 0..1000 chars) - Feedback from clinic
+//   - createdAt: timestamp (required, immutable) - Creation timestamp
+//   - updatedAt: timestamp (optional) - Update timestamp
+//
+// Collection: announcements/{annId}
+// Document ID: Auto-generated string
+// Fields:
+//   - id: string (optional)
+//   - authorId: string (required, immutable) - Author UID
+//   - authorRole: string (required, immutable) - 'vet' or 'clinic'
+//   - authorName: string (required, 0..100 chars) - Author name
+//   - type: string (required) - 'announcement' or 'event'
+//   - title: string (required, 1..150 chars) - Headline
+//   - body: string (required, 1..5000 chars) - Announcement text
+//   - eventDate: timestamp (optional/nullable) - Optional event date
+//   - location: string (optional/nullable, 0..200 chars) - Event venue
+//   - published: bool (required) - Public visibility flag
+//   - createdAt: timestamp (required, immutable) - Creation timestamp
+//   - updatedAt: timestamp (optional) - Update timestamp
+//
+// Collection: api_test_logs/{logId}
+// Document ID: Auto-generated string
+// Fields:
+//   - note: string (optional, 0..500 chars) - Diagnostic log entry
+//   - createdAt: timestamp or string (optional, 0..100 chars)
+//   - updatedAt: timestamp or string (optional, 0..100 chars)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Global Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function validStringLength(field, minLen, maxLen) {
+      return (field in request.resource.data) &&
+        request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+        request.resource.data[field] == null ||
+        (request.resource.data[field] is string &&
+         request.resource.data[field].size() >= minLen &&
+         request.resource.data[field].size() <= maxLen);
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.size() <= 254 &&
+        email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    // Lookup helper for parent cat document ownership
+    function isCatOwner(catId) {
+      return isAuthenticated() &&
+        catId is string &&
+        catId.size() > 0 &&
+        exists(/databases/$(database)/documents/cats/$(catId)) &&
+        get(/databases/$(database)/documents/cats/$(catId)).data.userId == request.auth.uid;
+    }
+
+    // Ownership check for cat child records (weight_logs, vaccines, vet_visits)
+    // Directly authorizes if document carries userId == auth.uid,
+    // or falls back to resolving parent cats/{catId} ownership.
+    function isCatRecordAccessible(data) {
+      return isAuthenticated() && (
+        (('userId' in data) && data.userId == request.auth.uid) ||
+        (('catId' in data) && isCatOwner(data.catId))
+      );
+    }
+
+    function isCatRecordCreateAuthorized(data) {
+      return isAuthenticated() && (
+        (('userId' in data) ? data.userId == request.auth.uid : true) &&
+        (
+          (('userId' in data) && data.userId == request.auth.uid) ||
+          (('catId' in data) && isCatOwner(data.catId))
+        )
+      );
+    }
+
+    // ===============================================================
+    // Domain Validators (Applied on Create and Update)
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['id', 'email', 'fullName', 'role', 'createdAt']) &&
+        hasOnlyAllowedFields(['id', 'email', 'fullName', 'role', 'createdAt']) &&
+        data.id == request.auth.uid &&
+        isValidEmail(data.email) &&
+        validStringLength('fullName', 1, 100) &&
+        data.role in ['owner', 'vet', 'clinic'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidProvider(data) {
+      return hasRequiredFields(['role', 'displayName', 'address', 'city', 'phone', 'active', 'createdAt']) &&
+        hasOnlyAllowedFields([
+          'id', 'role', 'displayName', 'address', 'city', 'phone', 'bio',
+          'specialty', 'visitTypes', 'openingHours', 'openTime', 'closeTime',
+          'openDays', 'hoursLabel', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.role in ['vet', 'clinic'] &&
+        validStringLength('displayName', 1, 100) &&
+        validStringLength('address', 0, 200) &&
+        validStringLength('city', 0, 100) &&
+        validStringLength('phone', 0, 30) &&
+        isValidOptionalString('bio', 0, 1000) &&
+        isValidOptionalString('specialty', 0, 100) &&
+        isValidOptionalString('openingHours', 0, 100) &&
+        isValidOptionalString('openTime', 0, 10) &&
+        isValidOptionalString('closeTime', 0, 10) &&
+        isValidOptionalString('hoursLabel', 0, 150) &&
+        (!('visitTypes' in data) || (data.visitTypes is list && data.visitTypes.size() <= 20)) &&
+        (!('openDays' in data) || (data.openDays is list && data.openDays.size() <= 7)) &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidCat(data) {
+      return hasRequiredFields(['userId', 'name', 'weight']) &&
+        hasOnlyAllowedFields([
+          'id', 'userId', 'name', 'breed', 'weight', 'birthDate',
+          'imageBase64', 'imageUrl', 'diet', 'vaccine', 'createdAt',
+          'updatedAt', 'timestamp'
+        ]) &&
+        data.userId is string &&
+        validStringLength('name', 1, 100) &&
+        isValidOptionalString('breed', 0, 100) &&
+        data.weight is number && data.weight > 0 && data.weight <= 100 &&
+        (!('birthDate' in data) || data.birthDate == null || data.birthDate is timestamp) &&
+        isValidOptionalString('imageBase64', 0, 500000) &&
+        isValidOptionalString('imageUrl', 0, 500000) &&
+        (!('diet' in data) || data.diet is map) &&
+        (!('vaccine' in data) || data.vaccine is map) &&
+        (!('createdAt' in data) || data.createdAt is timestamp) &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp) &&
+        (!('timestamp' in data) || data.timestamp is timestamp);
+    }
+
+    function isValidWeightLog(data) {
+      return hasRequiredFields(['weight', 'date']) &&
+        hasOnlyAllowedFields(['id', 'catId', 'userId', 'weight', 'date', 'notes']) &&
+        (('catId' in data) || ('userId' in data)) &&
+        (!('catId' in data) || (data.catId is string && data.catId.size() <= 100)) &&
+        (!('userId' in data) || (data.userId is string && data.userId.size() <= 128)) &&
+        data.weight is number && data.weight > 0 && data.weight <= 100 &&
+        data.date is timestamp &&
+        isValidOptionalString('notes', 0, 500);
+    }
+
+    function isValidVaccine(data) {
+      return hasRequiredFields(['type', 'dateGiven', 'nextDueDate']) &&
+        hasOnlyAllowedFields(['id', 'catId', 'userId', 'type', 'dateGiven', 'nextDueDate', 'clinicName', 'veterinarian', 'notes']) &&
+        (('catId' in data) || ('userId' in data)) &&
+        (!('catId' in data) || (data.catId is string && data.catId.size() <= 100)) &&
+        (!('userId' in data) || (data.userId is string && data.userId.size() <= 128)) &&
+        validStringLength('type', 1, 100) &&
+        data.dateGiven is timestamp &&
+        data.nextDueDate is timestamp &&
+        isValidOptionalString('clinicName', 0, 150) &&
+        isValidOptionalString('veterinarian', 0, 150) &&
+        isValidOptionalString('notes', 0, 1000);
+    }
+
+    function isValidVetVisit(data) {
+      return hasRequiredFields(['visitDate', 'clinicName', 'reason', 'diagnosis']) &&
+        hasOnlyAllowedFields(['id', 'catId', 'userId', 'visitDate', 'clinicName', 'reason', 'diagnosis', 'prescribedMedicine', 'followUpDate']) &&
+        (('catId' in data) || ('userId' in data)) &&
+        (!('catId' in data) || (data.catId is string && data.catId.size() <= 100)) &&
+        (!('userId' in data) || (data.userId is string && data.userId.size() <= 128)) &&
+        data.visitDate is timestamp &&
+        validStringLength('clinicName', 1, 150) &&
+        validStringLength('reason', 1, 500) &&
+        validStringLength('diagnosis', 1, 1000) &&
+        isValidOptionalString('prescribedMedicine', 0, 1000) &&
+        (!('followUpDate' in data) || data.followUpDate == null || data.followUpDate is timestamp);
+    }
+
+    function isValidService(data) {
+      return hasRequiredFields(['providerId', 'providerName', 'name', 'category', 'price', 'durationMinutes', 'active', 'createdAt']) &&
+        hasOnlyAllowedFields([
+          'id', 'providerId', 'providerName', 'name', 'description',
+          'category', 'price', 'durationMinutes', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.providerId is string && data.providerId.size() <= 128 &&
+        validStringLength('providerName', 0, 100) &&
+        validStringLength('name', 1, 100) &&
+        isValidOptionalString('description', 0, 1000) &&
+        validStringLength('category', 0, 50) &&
+        data.price is number && data.price >= 0 && data.price <= 100000 &&
+        data.durationMinutes is number && data.durationMinutes > 0 && data.durationMinutes <= 1440 &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidReservation(data) {
+      return hasRequiredFields(['ownerId', 'catId', 'vetId', 'requestedAt', 'status', 'createdAt']) &&
+        hasOnlyAllowedFields([
+          'id', 'ownerId', 'ownerName', 'catId', 'catName', 'catBreed',
+          'vetId', 'vetName', 'visitType', 'requestedAt', 'notes',
+          'status', 'providerNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId is string && data.ownerId.size() <= 128 &&
+        data.catId is string && data.catId.size() <= 100 &&
+        data.vetId is string && data.vetId.size() <= 128 &&
+        isValidOptionalString('ownerName', 0, 100) &&
+        isValidOptionalString('catName', 0, 100) &&
+        isValidOptionalString('catBreed', 0, 100) &&
+        isValidOptionalString('vetName', 0, 100) &&
+        isValidOptionalString('visitType', 0, 50) &&
+        isValidOptionalString('notes', 0, 1000) &&
+        isValidOptionalString('providerNote', 0, 1000) &&
+        data.status in ['pending', 'accepted', 'declined', 'cancelled', 'completed', 'expired'] &&
+        data.requestedAt is timestamp &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidBooking(data) {
+      return hasRequiredFields(['ownerId', 'catId', 'clinicId', 'serviceId', 'scheduledAt', 'status', 'createdAt']) &&
+        hasOnlyAllowedFields([
+          'id', 'ownerId', 'ownerName', 'catId', 'catName', 'catBreed',
+          'clinicId', 'clinicName', 'serviceId', 'serviceName', 'servicePrice',
+          'serviceDurationMinutes', 'scheduledAt', 'notes', 'status',
+          'providerNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.ownerId is string && data.ownerId.size() <= 128 &&
+        data.catId is string && data.catId.size() <= 100 &&
+        data.clinicId is string && data.clinicId.size() <= 128 &&
+        data.serviceId is string && data.serviceId.size() <= 100 &&
+        isValidOptionalString('ownerName', 0, 100) &&
+        isValidOptionalString('catName', 0, 100) &&
+        isValidOptionalString('catBreed', 0, 100) &&
+        isValidOptionalString('clinicName', 0, 100) &&
+        isValidOptionalString('serviceName', 0, 100) &&
+        isValidOptionalString('notes', 0, 1000) &&
+        isValidOptionalString('providerNote', 0, 1000) &&
+        (!('servicePrice' in data) || (data.servicePrice is number && data.servicePrice >= 0 && data.servicePrice <= 100000)) &&
+        (!('serviceDurationMinutes' in data) || (data.serviceDurationMinutes is number && data.serviceDurationMinutes > 0 && data.serviceDurationMinutes <= 1440)) &&
+        data.status in ['pending', 'accepted', 'declined', 'cancelled', 'completed', 'expired'] &&
+        data.scheduledAt is timestamp &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidAnnouncement(data) {
+      return hasRequiredFields(['authorId', 'authorRole', 'authorName', 'type', 'title', 'body', 'published', 'createdAt']) &&
+        hasOnlyAllowedFields([
+          'id', 'authorId', 'authorRole', 'authorName', 'type', 'title',
+          'body', 'eventDate', 'location', 'expiresAt', 'published', 'createdAt', 'updatedAt'
+        ]) &&
+        data.authorId is string && data.authorId.size() <= 128 &&
+        data.authorRole in ['vet', 'clinic'] &&
+        validStringLength('authorName', 0, 100) &&
+        data.type in ['announcement', 'event'] &&
+        validStringLength('title', 1, 150) &&
+        validStringLength('body', 1, 5000) &&
+        (!('eventDate' in data) || data.eventDate == null || data.eventDate is timestamp) &&
+        isValidOptionalString('location', 0, 200) &&
+        (!('expiresAt' in data) || data.expiresAt == null || data.expiresAt is timestamp) &&
+        data.published is bool &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidApiTestLog(data) {
+      return hasOnlyAllowedFields(['id', 'note', 'createdAt', 'updatedAt']) &&
+        isValidOptionalString('note', 0, 500) &&
+        (!('createdAt' in data) || data.createdAt is timestamp || (data.createdAt is string && data.createdAt.size() <= 100)) &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp || (data.updatedAt is string && data.updatedAt.size() <= 100));
+    }
+
+    // ===============================================================
+    // Root Rule: Default Deny All Unmatched Access
+    // ===============================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // 1. users/{uid}
+    // ===============================================================
+    match /users/{userId} {
+      // Authenticated users can read provider names and roles
+      allow read: if isAuthenticated();
+
+      // Only the user themselves can create their profile with valid role
+      allow create: if isOwner(userId) &&
+        isValidUser(request.resource.data);
+
+      // Self-update only; role and creation metadata cannot be escalated or changed
+      allow update: if isOwner(userId) &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.role == resource.data.role &&
+        areImmutableFieldsUnchanged(['id', 'createdAt']);
+
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // 2. providers/{providerId}
+    // ===============================================================
+    match /providers/{providerId} {
+      // Public directory for authenticated pet owners to discover vets and clinics
+      allow read: if isAuthenticated();
+
+      // Only the provider themselves can create or update their listing
+      allow create: if isOwner(providerId) &&
+        isValidProvider(request.resource.data);
+
+      allow update: if isOwner(providerId) &&
+        isValidProvider(request.resource.data) &&
+        areImmutableFieldsUnchanged(['role', 'createdAt']);
+
+      allow delete: if false;
+    }
+
+    // ===============================================================
+    // 3. cats/{catId}
+    // ===============================================================
+    match /cats/{catId} {
+      // Only the owner of the cat can view, update, or delete
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+
+      allow create: if isAuthenticated() &&
+        request.resource.data.userId == request.auth.uid &&
+        isValidCat(request.resource.data);
+
+      allow update: if isAuthenticated() &&
+        resource.data.userId == request.auth.uid &&
+        isValidCat(request.resource.data) &&
+        areImmutableFieldsUnchanged(['userId', 'createdAt']);
+
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // ===============================================================
+    // 4. Cat Medical Records: weight_logs, vaccines, vet_visits
+    // ===============================================================
+    match /weight_logs/{logId} {
+      allow read: if isCatRecordAccessible(resource.data);
+
+      allow create: if isCatRecordCreateAuthorized(request.resource.data) &&
+        isValidWeightLog(request.resource.data);
+
+      allow update: if isCatRecordAccessible(resource.data) &&
+        isCatRecordCreateAuthorized(request.resource.data) &&
+        isValidWeightLog(request.resource.data) &&
+        areImmutableFieldsUnchanged(['id', 'catId', 'userId']);
+
+      allow delete: if isCatRecordAccessible(resource.data);
+    }
+
+    match /vaccines/{vaccineId} {
+      allow read: if isCatRecordAccessible(resource.data);
+
+      allow create: if isCatRecordCreateAuthorized(request.resource.data) &&
+        isValidVaccine(request.resource.data);
+
+      allow update: if isCatRecordAccessible(resource.data) &&
+        isCatRecordCreateAuthorized(request.resource.data) &&
+        isValidVaccine(request.resource.data) &&
+        areImmutableFieldsUnchanged(['id', 'catId', 'userId']);
+
+      allow delete: if isCatRecordAccessible(resource.data);
+    }
+
+    match /vet_visits/{visitId} {
+      allow read: if isCatRecordAccessible(resource.data);
+
+      allow create: if isCatRecordCreateAuthorized(request.resource.data) &&
+        isValidVetVisit(request.resource.data);
+
+      allow update: if isCatRecordAccessible(resource.data) &&
+        isCatRecordCreateAuthorized(request.resource.data) &&
+        isValidVetVisit(request.resource.data) &&
+        areImmutableFieldsUnchanged(['id', 'catId', 'userId']);
+
+      allow delete: if isCatRecordAccessible(resource.data);
+    }
+
+    // ===============================================================
+    // 5. services/{serviceId}
+    // ===============================================================
+    match /services/{serviceId} {
+      // Owners browse offerings during discover and booking flows
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        request.auth.uid == request.resource.data.providerId &&
+        isValidService(request.resource.data);
+
+      allow update: if isAuthenticated() &&
+        request.auth.uid == resource.data.providerId &&
+        isValidService(request.resource.data) &&
+        areImmutableFieldsUnchanged(['providerId', 'createdAt']);
+
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.providerId;
+    }
+
+    // ===============================================================
+    // 6. reservations/{resId} (Owner <-> Vet)
+    // ===============================================================
+    match /reservations/{resId} {
+      // Read access: owner, assigned vet, or any authenticated user if status is 'accepted' (to check slot availability)
+      allow read: if isAuthenticated() && (
+        request.auth.uid == resource.data.ownerId ||
+        request.auth.uid == resource.data.vetId ||
+        resource.data.status == 'accepted'
+      );
+
+      // Create: owner initiates appointment with status 'pending'
+      allow create: if isAuthenticated() &&
+        request.auth.uid == request.resource.data.ownerId &&
+        request.resource.data.status == 'pending' &&
+        isValidReservation(request.resource.data);
+
+      // Update:
+      // - Owner can edit details while pending, or cancel
+      // - Vet can transition status to accepted, declined, or completed with provider notes
+      allow update: if isAuthenticated() &&
+        isValidReservation(request.resource.data) &&
+        areImmutableFieldsUnchanged(['ownerId', 'catId', 'vetId', 'createdAt']) &&
+        (
+          (request.auth.uid == resource.data.ownerId &&
+            (resource.data.status == 'pending' || request.resource.data.status == 'cancelled')) ||
+          (request.auth.uid == resource.data.vetId &&
+            request.resource.data.status in ['accepted', 'declined', 'completed', 'expired'])
+        );
+
+      // Delete: owner may only delete closed (non-active) reservations
+      allow delete: if isAuthenticated() &&
+        request.auth.uid == resource.data.ownerId &&
+        resource.data.status in ['declined', 'cancelled', 'completed', 'expired'];
+    }
+
+    // ===============================================================
+    // 7. bookings/{bookId} (Owner <-> Clinic)
+    // ===============================================================
+    match /bookings/{bookId} {
+      // Read access: owner, booked clinic, or any authenticated user if status is 'accepted' (to check slot availability)
+      allow read: if isAuthenticated() && (
+        request.auth.uid == resource.data.ownerId ||
+        request.auth.uid == resource.data.clinicId ||
+        resource.data.status == 'accepted'
+      );
+
+      // Create: owner creates booking with status 'pending'
+      allow create: if isAuthenticated() &&
+        request.auth.uid == request.resource.data.ownerId &&
+        request.resource.data.status == 'pending' &&
+        isValidBooking(request.resource.data);
+
+      // Update:
+      // - Owner can edit details while pending, or cancel
+      // - Clinic can transition status to accepted, declined, or completed with provider notes
+      allow update: if isAuthenticated() &&
+        isValidBooking(request.resource.data) &&
+        areImmutableFieldsUnchanged(['ownerId', 'catId', 'clinicId', 'createdAt']) &&
+        (
+          (request.auth.uid == resource.data.ownerId &&
+            (resource.data.status == 'pending' || request.resource.data.status == 'cancelled')) ||
+          (request.auth.uid == resource.data.clinicId &&
+            request.resource.data.status in ['accepted', 'declined', 'completed', 'expired'])
+        );
+
+      // Delete: owner may only delete closed bookings
+      allow delete: if isAuthenticated() &&
+        request.auth.uid == resource.data.ownerId &&
+        resource.data.status in ['declined', 'cancelled', 'completed', 'expired'];
+    }
+
+    // ===============================================================
+    // 8. announcements/{annId}
+    // ===============================================================
+    match /announcements/{annId} {
+      // Read access: any authenticated user if published, or author draft
+      allow read: if isAuthenticated() && (
+        resource.data.published == true ||
+        request.auth.uid == resource.data.authorId
+      );
+
+      allow create: if isAuthenticated() &&
+        request.auth.uid == request.resource.data.authorId &&
+        isValidAnnouncement(request.resource.data);
+
+      allow update: if isAuthenticated() &&
+        request.auth.uid == resource.data.authorId &&
+        isValidAnnouncement(request.resource.data) &&
+        areImmutableFieldsUnchanged(['authorId', 'authorRole', 'createdAt']);
+
+      allow delete: if isAuthenticated() && request.auth.uid == resource.data.authorId;
+    }
+
+    // ===============================================================
+    // 9. api_test_logs/{logId} (REST Test Console)
+    // ===============================================================
+    match /api_test_logs/{logId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() &&
+        isValidApiTestLog(request.resource.data);
+
+      allow update: if isAuthenticated() &&
+        isValidApiTestLog(request.resource.data);
+
+      allow delete: if isAuthenticated();
+    }
+  }
+}
