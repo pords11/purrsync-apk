@@ -1,4 +1,4 @@
-﻿name: Build PurrSync APK
+name: Build PurrSync APK
 
 on:
   push:
@@ -22,27 +22,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-
-      - name: Ensure Android platform files exist
-        run: |
-          if [ ! -d "android" ]; then
-            flutter create . --platforms=android
-          fi
-
-      - name: Enable Core Library Desugaring
-        run: |
-          BUILD_GRADLE="android/app/build.gradle"
-          if grep -q "isCoreLibraryDesugaringEnabled" ""; then
-            echo "Already enabled"
-          else
-            sed -i '/defaultConfig {/a \    minSdk 21\n    multiDexEnabled true\n    coreLibraryDesugaringEnabled true' ""
-          fi
-          
-          # Add multi-dex and desugar dependency if not present
-          DEPENDENCIES="dependencies {"
-          if ! grep -q "coreLibraryDesugaring" ""; then
-            sed -i '/dependencies {/a \    coreLibraryDesugaring '\''com.android.tools:desugar_jdk_libs:2.0.4'\''' ""
-          fi
 
       - name: Get packages
         run: flutter pub get
