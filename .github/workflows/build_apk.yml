@@ -32,8 +32,12 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
+      - name: Patch flutter_local_notifications bigLargeIcon bug
+        run: |
+          find /home/runner/.pub-cache -name "FlutterLocalNotificationsPlugin.java" -exec sed -i 's/bigPictureStyle.bigLargeIcon(null);/bigPictureStyle.bigLargeIcon((android.graphics.Bitmap) null);/g' {} +
+
       - name: Build Release APK
-        run: flutter build apk --release --no-tree-shake-icons
+        run: flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
