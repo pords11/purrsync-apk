@@ -272,7 +272,7 @@ class _VetQRScannerDialogState extends State<VetQRScannerDialog> {
                     child: const Text('Close'),
                   ),
                 ),
-                if (hasAppt && (res != null || book != null)) ...[
+                if (res != null || book != null) ...[
                   const SizedBox(width: 10),
                   Expanded(
                     child: ElevatedButton.icon(
@@ -286,13 +286,16 @@ class _VetQRScannerDialogState extends State<VetQRScannerDialog> {
                             catId: cat.id,
                             catName: cat.name,
                             ownerId: res != null ? res.ownerId : book!.ownerId,
+                            ownerName: res != null ? res.ownerName : book!.ownerName,
+                            catBreed: cat.breed,
                             clinicName: widget.providerName,
                             initialWeight: cat.weight,
+                            baseServiceFeePhp: book != null ? book.servicePrice : 550.0,
                           ),
                         );
                       },
                       icon: const Icon(Icons.medical_services_outlined, size: 16, color: Colors.white),
-                      label: const Text('Start EMR', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                      label: const Text('Start Smart EMR', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.primaryTeal,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

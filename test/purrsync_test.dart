@@ -649,5 +649,37 @@ void main() {
       final anomaly = FelineProtocolUtils.detectWeightAnomaly(logs, 4.4);
       expect(anomaly.detected, isFalse);
     });
+
+    test('Reservation and Booking preserve automated queueNumber, checkedInAt, and clinicalEmrPayload', () {
+      final now = DateTime.now();
+      final res = Reservation(
+        id: 'r_q1',
+        ownerId: 'o1',
+        ownerName: 'Ferdinand',
+        catId: 'c1',
+        catName: 'Mochi',
+        catBreed: 'Persian',
+        vetId: 'v1',
+        vetName: 'Purrfect Care Feline Veterinary Center',
+        visitType: 'Checkup',
+        requestedAt: now,
+        status: RequestStatus.completed,
+        queueNumber: 'Q-01-M',
+        checkedInAt: now,
+        clinicalEmrPayload: {
+          'recordedWeightKg': 4.2,
+          'temperatureCelsius': 38.6,
+          'totalBillPhp': 1400.0,
+        },
+        createdAt: now,
+        updatedAt: now,
+      );
+
+      final restored = Reservation.fromMap('r_q1', res.toMap());
+      expect(restored.queueNumber, equals('Q-01-M'));
+      expect(restored.checkedInAt, isNotNull);
+      expect(restored.clinicalEmrPayload?['recordedWeightKg'], equals(4.2));
+      expect(restored.clinicalEmrPayload?['totalBillPhp'], equals(1400.0));
+    });
   });
 }

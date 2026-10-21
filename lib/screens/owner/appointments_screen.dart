@@ -247,6 +247,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> with SingleTick
           return const SkeletonCardList(itemCount: 3);
         }
         final list = snapshot.data!;
+        _db.syncCompletedClinicalEMRForOwner(reservations: list);
         final now = DateTime.now();
         if (!kIsWeb) {
           for (final r in list) {
@@ -399,6 +400,30 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> with SingleTick
                     style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary, fontWeight: FontWeight.w500),
                   ),
                 ),
+                if (r.queueNumber != null && r.queueNumber!.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryTealDark,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'Queue: ${r.queueNumber}',
+                      style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                if (r.checkedInAt != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppTheme.statusSafe.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      '🟢 Checked-In at Reception',
+                      style: TextStyle(fontSize: 11, color: AppTheme.statusSafe, fontWeight: FontWeight.w800),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 10),
@@ -640,6 +665,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> with SingleTick
           return const SkeletonCardList(itemCount: 3);
         }
         final list = snapshot.data!;
+        _db.syncCompletedClinicalEMRForOwner(bookings: list);
         final now = DateTime.now();
         if (!kIsWeb) {
           for (final b in list) {
@@ -768,7 +794,7 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> with SingleTick
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    '${b.serviceName} • \$${b.servicePrice.toStringAsFixed(2)}',
+                    '${b.serviceName} • ₱${b.servicePrice.toStringAsFixed(0)}',
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5, color: AppTheme.primaryTealDark),
                   ),
                 ),
@@ -783,6 +809,30 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> with SingleTick
                     style: const TextStyle(fontSize: 11.5, color: AppTheme.textSecondary, fontWeight: FontWeight.w500),
                   ),
                 ),
+                if (b.queueNumber != null && b.queueNumber!.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryTealDark,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'Queue: ${b.queueNumber}',
+                      style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                if (b.checkedInAt != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppTheme.statusSafe.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      '🟢 Checked-In at Reception',
+                      style: TextStyle(fontSize: 11, color: AppTheme.statusSafe, fontWeight: FontWeight.w800),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 10),

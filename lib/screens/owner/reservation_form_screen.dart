@@ -6,6 +6,7 @@ import '../../models/provider_profile.dart';
 import '../../models/reservation.dart';
 import '../../services/firebase_service.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/map_utils.dart';
 import '../../utils/time_utils.dart';
 import '../../widgets/boutique_animations.dart';
 import '../add_cat_screen.dart';
@@ -353,6 +354,15 @@ class _ReservationFormScreenState extends State<ReservationFormScreen> {
                                   ),
                                 ],
                               ),
+                            ),
+                            IconButton(
+                              tooltip: 'Open Clinic in Google Maps',
+                              onPressed: () => MapUtils.openDirections(
+                                destinationAddress: '${widget.vet.address}, ${widget.vet.city}',
+                                clinicName: widget.vet.displayName,
+                                context: context,
+                              ),
+                              icon: const Icon(Icons.directions, color: Color(0xFF4285F4)),
                             ),
                           ],
                         ),

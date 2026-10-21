@@ -6,13 +6,15 @@ import '../../models/provider_profile.dart';
 import '../../models/request_status.dart';
 import '../../models/reservation.dart';
 import '../../models/booking.dart';
-import '../../models/cat.dart';
 import '../../models/service_offering.dart';
 import '../../models/announcement.dart';
 import '../../models/user_role.dart';
 import '../../widgets/operating_hours_selector.dart';
 import '../../widgets/boutique_animations.dart';
+import '../../widgets/vet_qr_scanner_dialog.dart';
+import '../../widgets/clinical_emr_dialog.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/map_utils.dart';
 
 /// Unified "Vet / Clinic" Provider Dashboard combining consultation reservations,
 /// service bookings, services catalog CRUD, community announcements, and provider profile.
@@ -40,6 +42,12 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
   bool _hasPendingEmergency = false;
   final Set<String> _acknowledgedEmergencyIds = {};
   bool _isShowingEmergencyDialog = false;
+
+  // Automated Smart Queue & Reception Engine state
+  bool _autoAcceptEnabled = true;
+  bool _isAutoProcessingQueue = false;
+  final Set<String> _autoProcessedIds = {};
+  String _cachedProviderName = 'Veterinary Clinic';
 
   @override
   void initState() {
@@ -109,6 +117,157 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
     if (unacknowledgedEmergency != null && !_isShowingEmergencyDialog && mounted) {
       _acknowledgedEmergencyIds.add(unacknowledgedEmergency.id);
       _triggerUrgentEmergencyDialog(unacknowledgedEmergency);
+    }
+
+    // Live Automated Queue Engine: auto-accept non-conflicting incoming requests when enabled
+    if (_autoAcceptEnabled && pendingCount > 0 && !_isAutoProcessingQueue) {
+      final hasNewPending = _latestReservations.any(
+            (r) => r.status == RequestStatus.pending && !_autoProcessedIds.contains(r.id),
+          ) ||
+          _latestBookings.any(
+            (b) => b.status == RequestStatus.pending && !_autoProcessedIds.contains(b.id),
+          );
+      if (hasNewPending) {
+        for (final r in _latestReservations) {
+          if (r.status == RequestStatus.pending) _autoProcessedIds.add(r.id);
+        }
+        for (final b in _latestBookings) {
+          if (b.status == RequestStatus.pending) _autoProcessedIds.add(b.id);
+        }
+        final user = _auth.getCurrentUser();
+        if (user != null) {
+          _runSilentAutoAccept(user.uid, _cachedProviderName);
+        }
+      }
+    }
+  }
+
+  Future<void> _runSilentAutoAccept(String providerId, String providerName) async {
+    if (_isAutoProcessingQueue) return;
+    _isAutoProcessingQueue = true;
+    try {
+      final res = await _auth.autoProcessPendingAppointments(
+        providerId: providerId,
+        providerName: providerName,
+      );
+      final accepted = res['acceptedCount'] ?? 0;
+      if (accepted > 0 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚡ Smart Queue Auto-Accepted $accepted conflict-free appointment(s) & assigned queue numbers!'),
+            backgroundColor: AppTheme.primaryTeal,
+          ),
+        );
+      }
+    } catch (_) {
+    } finally {
+      _isAutoProcessingQueue = false;
+    }
+  }
+
+  Future<void> _triggerAutoProcessPendingQueue(String providerId, String providerName) async {
+    if (_isAutoProcessingQueue) return;
+    setState(() => _isAutoProcessingQueue = true);
+    try {
+      final res = await _auth.autoProcessPendingAppointments(
+        providerId: providerId,
+        providerName: providerName,
+      );
+      final accepted = res['acceptedCount'] ?? 0;
+      final conflicts = res['conflictCount'] ?? 0;
+      if (!mounted) return;
+      if (accepted > 0) {
+        await showPurrSyncSuccessOverlay(
+          context,
+          title: 'Auto-Processed $accepted Patient(s)!',
+          subtitle: conflicts > 0
+              ? 'Queue numbers assigned. $conflicts conflicting slot(s) held for manual review.'
+              : 'All valid appointments auto-confirmed & assigned live Queue Numbers.',
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              conflicts > 0
+                  ? 'No conflict-free pending slots to auto-accept ($conflicts time conflict(s) detected).'
+                  : 'All pending appointments are already processed!',
+            ),
+            backgroundColor: AppTheme.primaryTeal,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isAutoProcessingQueue = false);
+    }
+  }
+
+  void _openQRScanner(String providerId, String providerName) {
+    showDialog(
+      context: context,
+      builder: (_) => VetQRScannerDialog(
+        providerId: providerId,
+        providerName: providerName,
+      ),
+    );
+  }
+
+  void _callNextPatientAndOpenEMR(String providerName) {
+    final now = DateTime.now();
+    final activeItems = <_UnifiedAppointmentItem>[];
+
+    for (final r in _latestReservations) {
+      final isEmergency = r.visitType.toLowerCase().contains('emergency');
+      final eff = effectiveStatus(
+        stored: r.status,
+        start: isEmergency ? r.requestedAt.add(const Duration(hours: 12)) : r.requestedAt,
+        end: r.requestedAt.add(const Duration(hours: 1)),
+        now: now,
+      );
+      if (eff == RequestStatus.accepted || (isEmergency && r.status == RequestStatus.pending)) {
+        activeItems.add(_UnifiedAppointmentItem.fromReservation(r, eff));
+      }
+    }
+
+    for (final b in _latestBookings) {
+      final eff = effectiveStatus(
+        stored: b.status,
+        start: b.scheduledAt,
+        end: b.scheduledAt.add(Duration(minutes: b.serviceDurationMinutes)),
+        now: now,
+      );
+      if (eff == RequestStatus.accepted) {
+        activeItems.add(_UnifiedAppointmentItem.fromBooking(b, eff));
+      }
+    }
+
+    if (activeItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No active/accepted patients in the queue right now. Scan a patient QR or accept a request first.'),
+          backgroundColor: AppTheme.primaryTeal,
+        ),
+      );
+      return;
+    }
+
+    // Priority sort: 1) Emergency -> 2) Checked-In via QR -> 3) Earliest scheduled time
+    activeItems.sort((a, b) {
+      if (a.isEmergency != b.isEmergency) return a.isEmergency ? -1 : 1;
+      if (a.isCheckedIn != b.isCheckedIn) return a.isCheckedIn ? -1 : 1;
+      return a.dateTime.compareTo(b.dateTime);
+    });
+
+    final nextItem = activeItems.first;
+    if (nextItem.isReservation) {
+      _showCompleteReservationDialog(nextItem.reservation!, providerName: providerName);
+    } else {
+      _showCompleteBookingDialog(nextItem.booking!, providerName: providerName);
     }
   }
 
@@ -257,6 +416,11 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
         backgroundColor: AppTheme.primaryTeal,
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            tooltip: 'Scan Patient QR Check-In',
+            onPressed: () => _openQRScanner(user.uid, _cachedProviderName),
+            icon: const Icon(Icons.qr_code_scanner_rounded, color: Colors.white),
+          ),
           const ThemeModeToggleButton(iconColor: Colors.white),
           Padding(
             padding: const EdgeInsets.only(right: 8.0),
@@ -293,12 +457,13 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
               ? profile!.displayName
               : (user.displayName ?? 'Vet / Clinic Provider');
           final formattedName = _formatProviderName(rawName);
+          _cachedProviderName = formattedName;
 
           return IndexedStack(
             index: _currentIndex,
             children: [
               _buildHomeTab(user.uid, user.email ?? '', formattedName, profile),
-              _buildAppointmentsTab(user.uid),
+              _buildAppointmentsTab(user.uid, formattedName),
               _buildServicesTab(user.uid, formattedName),
               _buildCommunityTab(user.uid, formattedName),
               _buildProfileTab(profile, formattedName, user.email ?? '', user.uid),
@@ -558,6 +723,141 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                               _buildStatBox('Total', totalRequests.toString(), Icons.list_alt, AppTheme.vetAccent),
                             ],
                           ),
+                          const SizedBox(height: 18),
+
+                          // Automated Clinic Operations & Live Queue Command Center
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: AppTheme.surface,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: AppTheme.primaryTeal.withValues(alpha: 0.35), width: 1.5),
+                              boxShadow: AppTheme.cardShadow,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: AppTheme.primaryTealLight,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: const Icon(Icons.bolt_rounded, color: AppTheme.primaryTealDark, size: 20),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    const Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Automated Clinic Command Center',
+                                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
+                                          ),
+                                          Text(
+                                            'Auto-Accept Queue • QR Check-In • 1-Tap Smart EMR',
+                                            style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const Divider(height: 18),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.auto_mode_rounded, size: 18, color: AppTheme.primaryTeal),
+                                    const SizedBox(width: 8),
+                                    const Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Auto-Accept Conflict-Free Bookings',
+                                            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+                                          ),
+                                          Text(
+                                            'Automatically accepts valid slots & assigns Queue Numbers (Q-01)',
+                                            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Switch(
+                                      value: _autoAcceptEnabled,
+                                      activeThumbColor: AppTheme.primaryTeal,
+                                      onChanged: (val) {
+                                        setState(() => _autoAcceptEnabled = val);
+                                        if (val) {
+                                          _triggerAutoProcessPendingQueue(providerId, displayName);
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: ElevatedButton.icon(
+                                        onPressed: () => _openQRScanner(providerId, displayName),
+                                        icon: const Icon(Icons.qr_code_scanner_rounded, size: 17, color: Colors.white),
+                                        label: const Text(
+                                          'Scan QR Check-In',
+                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white),
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppTheme.primaryTeal,
+                                          padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: ElevatedButton.icon(
+                                        onPressed: () => _callNextPatientAndOpenEMR(displayName),
+                                        icon: const Icon(Icons.medical_services_rounded, size: 17, color: Colors.white),
+                                        label: const Text(
+                                          'Call Next & EMR',
+                                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white),
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppTheme.terracotta,
+                                          padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if (totalPending > 0) ...[
+                                  const SizedBox(height: 8),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: OutlinedButton.icon(
+                                      onPressed: _isAutoProcessingQueue
+                                          ? null
+                                          : () => _triggerAutoProcessPendingQueue(providerId, displayName),
+                                      icon: const Icon(Icons.playlist_add_check_circle_outlined, size: 17),
+                                      label: Text(
+                                        '⚡ Auto-Process All $totalPending Pending Queue Request(s) Now',
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                      ),
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: AppTheme.primaryTealDark,
+                                        side: const BorderSide(color: AppTheme.primaryTeal),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
                           const SizedBox(height: 22),
 
                           // Today's Schedule
@@ -565,7 +865,7 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               const Text(
-                                "Today's Schedule",
+                                "Today's Live Patient Queue",
                                 style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
                               ),
                               Text(
@@ -614,9 +914,19 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                                           ),
                                           child: const Icon(Icons.pets, color: AppTheme.primaryTeal, size: 20),
                                         ),
-                                        title: Text('🐾 ${r.catName} (${r.visitType})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                        subtitle: Text('Owner: ${r.ownerName} • ${DateFormat('hh:mm a').format(r.requestedAt)}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                                        trailing: const Text('Consultation', style: TextStyle(color: AppTheme.primaryTealDark, fontWeight: FontWeight.bold, fontSize: 11)),
+                                        title: Text(
+                                          '${r.queueNumber != null ? '[${r.queueNumber}] ' : ''}🐾 ${r.catName} (${r.visitType})',
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                        ),
+                                        subtitle: Text(
+                                          'Owner: ${r.ownerName} • ${DateFormat('hh:mm a').format(r.requestedAt)}${r.checkedInAt != null ? ' • 🟢 Checked-In' : ''}',
+                                          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11.5),
+                                        ),
+                                        trailing: TextButton.icon(
+                                          onPressed: () => _showCompleteReservationDialog(r, providerName: displayName),
+                                          icon: const Icon(Icons.medical_services_outlined, size: 15, color: AppTheme.primaryTealDark),
+                                          label: const Text('Start EMR', style: TextStyle(color: AppTheme.primaryTealDark, fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -641,9 +951,19 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                                           ),
                                           child: const Icon(Icons.bookmark, color: AppTheme.terracotta, size: 20),
                                         ),
-                                        title: Text('💉 ${b.catName} • ${b.serviceName}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                        subtitle: Text('Owner: ${b.ownerName} • ${DateFormat('hh:mm a').format(b.scheduledAt)}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                                        trailing: const Text('Service', style: TextStyle(color: AppTheme.terracotta, fontWeight: FontWeight.bold, fontSize: 11)),
+                                        title: Text(
+                                          '${b.queueNumber != null ? '[${b.queueNumber}] ' : ''}💉 ${b.catName} • ${b.serviceName}',
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                        ),
+                                        subtitle: Text(
+                                          'Owner: ${b.ownerName} • ${DateFormat('hh:mm a').format(b.scheduledAt)}${b.checkedInAt != null ? ' • 🟢 Checked-In' : ''}',
+                                          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11.5),
+                                        ),
+                                        trailing: TextButton.icon(
+                                          onPressed: () => _showCompleteBookingDialog(b, providerName: displayName),
+                                          icon: const Icon(Icons.medical_services_outlined, size: 15, color: AppTheme.terracotta),
+                                          label: const Text('Start EMR', style: TextStyle(color: AppTheme.terracotta, fontWeight: FontWeight.bold, fontSize: 11.5)),
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -683,6 +1003,26 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                   const Divider(),
                   _infoRow(Icons.star, 'Specialty', profile!.specialty!),
                 ],
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => MapUtils.openDirections(
+                      destinationAddress: '${profile?.address ?? ''}, ${profile?.city ?? 'Metro Manila'}',
+                      clinicName: displayName,
+                      context: context,
+                    ),
+                    icon: const Icon(Icons.map_outlined, size: 17, color: AppTheme.primaryTealDark),
+                    label: const Text(
+                      '📍 Verify / Open Clinic Pin in Google Maps',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: AppTheme.primaryTealDark),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: AppTheme.primaryTeal.withValues(alpha: 0.45)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -766,7 +1106,7 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
   // ==========================================
   // TAB 1: APPOINTMENTS INBOX (UNIFIED)
   // ==========================================
-  Widget _buildAppointmentsTab(String providerId) {
+  Widget _buildAppointmentsTab(String providerId, String providerName) {
     return Column(
       children: [
         // Type filter pills (All vs Consultations vs Service Bookings)
@@ -784,48 +1124,97 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
           ),
         ),
 
-        // Status filter chips
+        // Status filter chips + Automated Queue Bar
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: Row(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+          child: Column(
             children: [
-              FilterChip(
-                selected: _appointmentStatusFilter == 'pending',
-                label: const Text('Pending'),
-                selectedColor: const Color(0xFFFDEFD7),
-                checkmarkColor: const Color(0xFFC77700),
-                labelStyle: TextStyle(
-                  color: _appointmentStatusFilter == 'pending' ? const Color(0xFF8A5200) : AppTheme.textSecondary,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12.5,
-                ),
-                onSelected: (val) => setState(() => _appointmentStatusFilter = 'pending'),
+              Row(
+                children: [
+                  FilterChip(
+                    selected: _appointmentStatusFilter == 'pending',
+                    label: const Text('Pending'),
+                    selectedColor: const Color(0xFFFDEFD7),
+                    checkmarkColor: const Color(0xFFC77700),
+                    labelStyle: TextStyle(
+                      color: _appointmentStatusFilter == 'pending' ? const Color(0xFF8A5200) : AppTheme.textSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12.5,
+                    ),
+                    onSelected: (val) => setState(() => _appointmentStatusFilter = 'pending'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilterChip(
+                    selected: _appointmentStatusFilter == 'accepted',
+                    label: const Text('Accepted / Queue'),
+                    selectedColor: AppTheme.primaryTealLight,
+                    checkmarkColor: AppTheme.primaryTeal,
+                    labelStyle: TextStyle(
+                      color: _appointmentStatusFilter == 'accepted' ? AppTheme.primaryTealDark : AppTheme.textSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12.5,
+                    ),
+                    onSelected: (val) => setState(() => _appointmentStatusFilter = 'accepted'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilterChip(
+                    selected: _appointmentStatusFilter == 'history',
+                    label: const Text('History'),
+                    selectedColor: const Color(0xFFEDE7F6),
+                    checkmarkColor: const Color(0xFF673AB7),
+                    labelStyle: TextStyle(
+                      color: _appointmentStatusFilter == 'history' ? const Color(0xFF512DA8) : AppTheme.textSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12.5,
+                    ),
+                    onSelected: (val) => setState(() => _appointmentStatusFilter = 'history'),
+                  ),
+                ],
               ),
-              const SizedBox(width: 8),
-              FilterChip(
-                selected: _appointmentStatusFilter == 'accepted',
-                label: const Text('Accepted'),
-                selectedColor: AppTheme.primaryTealLight,
-                checkmarkColor: AppTheme.primaryTeal,
-                labelStyle: TextStyle(
-                  color: _appointmentStatusFilter == 'accepted' ? AppTheme.primaryTealDark : AppTheme.textSecondary,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12.5,
-                ),
-                onSelected: (val) => setState(() => _appointmentStatusFilter = 'accepted'),
-              ),
-              const SizedBox(width: 8),
-              FilterChip(
-                selected: _appointmentStatusFilter == 'history',
-                label: const Text('History'),
-                selectedColor: const Color(0xFFEDE7F6),
-                checkmarkColor: const Color(0xFF673AB7),
-                labelStyle: TextStyle(
-                  color: _appointmentStatusFilter == 'history' ? const Color(0xFF512DA8) : AppTheme.textSecondary,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12.5,
-                ),
-                onSelected: (val) => setState(() => _appointmentStatusFilter = 'history'),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _openQRScanner(providerId, providerName),
+                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 15),
+                      label: const Text('QR Check-In', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.primaryTealDark,
+                        side: const BorderSide(color: AppTheme.primaryTeal),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _triggerAutoProcessPendingQueue(providerId, providerName),
+                      icon: const Icon(Icons.auto_mode_rounded, size: 15),
+                      label: const Text('Auto-Queue All', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.primaryTealDark,
+                        side: const BorderSide(color: AppTheme.primaryTeal),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => _callNextPatientAndOpenEMR(providerName),
+                      icon: const Icon(Icons.medical_services_rounded, size: 15, color: Colors.white),
+                      label: const Text('Call Next', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.terracotta,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1043,6 +1432,20 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    if (res.queueNumber != null && res.queueNumber!.isNotEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primaryTealDark,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          res.queueNumber!,
+                          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                     Flexible(
                       child: Text(
                         res.catName,
@@ -1050,6 +1453,20 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    if (res.checkedInAt != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppTheme.statusSafe.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          '🟢 CHECKED-IN',
+                          style: TextStyle(color: AppTheme.statusSafe, fontSize: 9.5, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1128,7 +1545,7 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(color: const Color(0xFFFBE9E7), borderRadius: BorderRadius.circular(8)),
-              child: Text('Your Note: ${res.providerNote}', style: const TextStyle(fontSize: 12, color: Color(0xFFD84315))),
+              child: Text('Clinic Note: ${res.providerNote}', style: const TextStyle(fontSize: 12, color: Color(0xFFD84315))),
             ),
           ],
           if (effStatus == RequestStatus.pending) ...[
@@ -1144,7 +1561,7 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                     child: Text(
-                      isEmergency ? 'Accept Emergency Triage' : 'Accept',
+                      isEmergency ? 'Accept Emergency Triage' : 'Accept & Queue',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
@@ -1166,18 +1583,54 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
           ],
           if (effStatus == RequestStatus.accepted) ...[
             const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _showCompleteReservationDialog(res),
-                icon: const Icon(Icons.check_circle_outline, size: 18),
-                label: const Text('Mark as Completed & Log Medical Visit', style: TextStyle(fontWeight: FontWeight.bold)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primaryTeal,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            Row(
+              children: [
+                if (res.checkedInAt == null) ...[
+                  Expanded(
+                    flex: 2,
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
+                          await _auth.checkInPatientWithQR(
+                            catId: res.catId,
+                            providerId: res.vetId,
+                            providerName: _cachedProviderName,
+                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('🟢 ${res.catName} checked-in at reception & assigned priority queue!'),
+                                backgroundColor: AppTheme.primaryTeal,
+                              ),
+                            );
+                          }
+                        } catch (_) {}
+                      },
+                      icon: const Icon(Icons.how_to_reg_rounded, size: 16),
+                      label: const Text('Check-In', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.primaryTealDark,
+                        side: const BorderSide(color: AppTheme.primaryTeal),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  flex: 3,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _showCompleteReservationDialog(res),
+                    icon: const Icon(Icons.medical_services_rounded, size: 17),
+                    label: const Text('Open Smart EMR & Complete', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primaryTeal,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
           ],
         ],
@@ -1216,6 +1669,20 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    if (b.queueNumber != null && b.queueNumber!.isNotEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primaryTealDark,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          b.queueNumber!,
+                          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                     Flexible(
                       child: Text(
                         b.catName,
@@ -1223,6 +1690,20 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    if (b.checkedInAt != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppTheme.statusSafe.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          '🟢 CHECKED-IN',
+                          style: TextStyle(color: AppTheme.statusSafe, fontSize: 9.5, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1231,7 +1712,7 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
           ),
           AppointmentStatusStepper(status: effStatus),
           const SizedBox(height: 8),
-          Text('Service: ${b.serviceName} (\$${b.servicePrice.toStringAsFixed(2)})', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          Text('Service: ${b.serviceName} (₱${b.servicePrice.toStringAsFixed(0)})', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
           Text('Owner: ${b.ownerName}', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
           Text(
             'Scheduled: ${DateFormat('EEE, MMM d, yyyy • hh:mm a').format(b.scheduledAt)} (${b.serviceDurationMinutes} mins)',
@@ -1271,7 +1752,7 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(color: const Color(0xFFFBE9E7), borderRadius: BorderRadius.circular(8)),
-              child: Text('Your Note: ${b.providerNote}', style: const TextStyle(fontSize: 12, color: Color(0xFFD84315))),
+              child: Text('Clinic Note: ${b.providerNote}', style: const TextStyle(fontSize: 12, color: Color(0xFFD84315))),
             ),
           ],
           if (effStatus == RequestStatus.pending) ...[
@@ -1286,7 +1767,7 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
-                    child: const Text('Accept', style: TextStyle(fontWeight: FontWeight.bold)),
+                    child: const Text('Accept & Queue', style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1306,18 +1787,54 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
           ],
           if (effStatus == RequestStatus.accepted) ...[
             const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _showCompleteBookingDialog(b),
-                icon: const Icon(Icons.check_circle_outline, size: 18),
-                label: const Text('Mark as Completed & Log Medical Visit', style: TextStyle(fontWeight: FontWeight.bold)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primaryTeal,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            Row(
+              children: [
+                if (b.checkedInAt == null) ...[
+                  Expanded(
+                    flex: 2,
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
+                          await _auth.checkInPatientWithQR(
+                            catId: b.catId,
+                            providerId: b.clinicId,
+                            providerName: _cachedProviderName,
+                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('🟢 ${b.catName} checked-in at reception & assigned priority queue!'),
+                                backgroundColor: AppTheme.primaryTeal,
+                              ),
+                            );
+                          }
+                        } catch (_) {}
+                      },
+                      icon: const Icon(Icons.how_to_reg_rounded, size: 16),
+                      label: const Text('Check-In', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.primaryTealDark,
+                        side: const BorderSide(color: AppTheme.primaryTeal),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  flex: 3,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _showCompleteBookingDialog(b),
+                    icon: const Icon(Icons.medical_services_rounded, size: 17),
+                    label: const Text('Open Smart EMR & Complete', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primaryTeal,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
           ],
         ],
@@ -1405,176 +1922,38 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
     await _updateBookingStatus(b.id, RequestStatus.accepted);
   }
 
-  void _showCompleteReservationDialog(Reservation res) {
-    final diagnosisCtrl = TextEditingController();
-    final medicineCtrl = TextEditingController();
+  void _showCompleteReservationDialog(Reservation res, {String? providerName}) {
     showDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.assignment_turned_in_outlined, color: AppTheme.primaryTeal),
-            SizedBox(width: 8),
-            Expanded(child: Text('Complete & Log Clinical Visit', style: TextStyle(fontSize: 17))),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Patient: ${res.catName} (${res.visitType})',
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Completing this consultation will automatically create a Medical History (VetVisit) record on the cat\'s profile.',
-                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: diagnosisCtrl,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Clinical Notes / Diagnosis / Treatment Given *',
-                  hintText: 'e.g. Mild upper respiratory infection, vitals stable, hydration administered.',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: medicineCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Prescribed Medicine / Home Care (optional)',
-                  hintText: 'e.g. Doxycycline 5mg twice daily for 7 days',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Back')),
-          ElevatedButton(
-            onPressed: () async {
-              final diagnosis = diagnosisCtrl.text.trim();
-              final medicine = medicineCtrl.text.trim();
-              final effectiveDiagnosis = diagnosis.isNotEmpty
-                  ? diagnosis
-                  : 'Consultation completed (${res.visitType}). Normal clinical evaluation.';
-              Navigator.pop(dialogCtx);
-
-              final summaryNote = medicine.isNotEmpty
-                  ? '$effectiveDiagnosis | Rx: $medicine'
-                  : effectiveDiagnosis;
-              await _updateReservationStatus(res.id, RequestStatus.completed, note: summaryNote);
-
-              try {
-                await _auth.addVetVisit(
-                  VetVisit(
-                    id: 'res_${res.id}',
-                    catId: res.catId,
-                    visitDate: DateTime.now(),
-                    clinicName: res.vetName,
-                    reason: res.notes.isNotEmpty ? '${res.visitType} — ${res.notes}' : res.visitType,
-                    diagnosis: effectiveDiagnosis,
-                    prescribedMedicine: medicine.isNotEmpty ? medicine : null,
-                  ),
-                );
-              } catch (_) {}
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryTeal, foregroundColor: Colors.white),
-            child: const Text('Confirm & Auto-Log Visit'),
-          ),
-        ],
+      builder: (_) => ClinicalEMRDialog(
+        appointmentId: res.id,
+        isBooking: false,
+        catId: res.catId,
+        catName: res.catName,
+        ownerId: res.ownerId,
+        ownerName: res.ownerName,
+        catBreed: res.catBreed,
+        clinicName: providerName ?? (res.vetName.isNotEmpty ? res.vetName : _cachedProviderName),
+        baseServiceFeePhp: 550.0,
+        initialVisitNotes: res.notes,
       ),
     );
   }
 
-  void _showCompleteBookingDialog(Booking b) {
-    final diagnosisCtrl = TextEditingController();
-    final medicineCtrl = TextEditingController();
+  void _showCompleteBookingDialog(Booking b, {String? providerName}) {
     showDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.assignment_turned_in_outlined, color: AppTheme.primaryTeal),
-            SizedBox(width: 8),
-            Expanded(child: Text('Complete & Log Clinic Service', style: TextStyle(fontSize: 17))),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Patient: ${b.catName} (${b.serviceName})',
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Completing this service will automatically create a Medical History (VetVisit) record on the cat\'s profile.',
-                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: diagnosisCtrl,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Clinical Notes / Diagnosis / Treatment Given *',
-                  hintText: 'e.g. Service completed smoothly, coat & skin healthy, no parasites observed.',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: medicineCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Prescribed Medicine / Care Instructions (optional)',
-                  hintText: 'e.g. Medicated shampoo follow-up in 2 weeks',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Back')),
-          ElevatedButton(
-            onPressed: () async {
-              final diagnosis = diagnosisCtrl.text.trim();
-              final medicine = medicineCtrl.text.trim();
-              final effectiveDiagnosis = diagnosis.isNotEmpty
-                  ? diagnosis
-                  : 'Clinic service completed (${b.serviceName}).';
-              Navigator.pop(dialogCtx);
-
-              final summaryNote = medicine.isNotEmpty
-                  ? '$effectiveDiagnosis | Care: $medicine'
-                  : effectiveDiagnosis;
-              await _updateBookingStatus(b.id, RequestStatus.completed, note: summaryNote);
-
-              try {
-                await _auth.addVetVisit(
-                  VetVisit(
-                    id: 'book_${b.id}',
-                    catId: b.catId,
-                    visitDate: DateTime.now(),
-                    clinicName: b.clinicName,
-                    reason: b.notes.isNotEmpty ? '${b.serviceName} — ${b.notes}' : b.serviceName,
-                    diagnosis: effectiveDiagnosis,
-                    prescribedMedicine: medicine.isNotEmpty ? medicine : null,
-                  ),
-                );
-              } catch (_) {}
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryTeal, foregroundColor: Colors.white),
-            child: const Text('Confirm & Auto-Log Visit'),
-          ),
-        ],
+      builder: (_) => ClinicalEMRDialog(
+        appointmentId: b.id,
+        isBooking: true,
+        catId: b.catId,
+        catName: b.catName,
+        ownerId: b.ownerId,
+        ownerName: b.ownerName,
+        catBreed: b.catBreed,
+        clinicName: providerName ?? (b.clinicName.isNotEmpty ? b.clinicName : _cachedProviderName),
+        baseServiceFeePhp: b.servicePrice > 0 ? b.servicePrice : 550.0,
+        initialVisitNotes: b.notes,
       ),
     );
   }
@@ -1738,91 +2117,129 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
           final services = snapshot.data!;
           if (services.isEmpty) {
             return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.medical_services_outlined, size: 72, color: AppTheme.textTertiary),
-                  const SizedBox(height: 16),
-                  const Text('No services in your catalog', style: TextStyle(fontSize: 17, color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  const Text('Add services such as Vaccinations, Grooming, Surgeries, or Consultations.', style: TextStyle(color: AppTheme.textSecondary)),
-                  const SizedBox(height: 16),
-                  ElevatedButton.icon(
-                    onPressed: () => _openServiceDialog(providerId, providerName),
-                    icon: const Icon(Icons.add, color: Colors.white),
-                    label: const Text('Add Service', style: TextStyle(color: Colors.white)),
-                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryTeal, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                  ),
-                ],
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.medical_services_outlined, size: 72, color: AppTheme.textTertiary),
+                    const SizedBox(height: 16),
+                    const Text('No services in your catalog', style: TextStyle(fontSize: 17, color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Auto-populate standard feline veterinary services in 1 tap or add a custom service.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: () => _handleAutoSeedServices(providerId, providerName),
+                      icon: const Icon(Icons.bolt_rounded, color: Colors.white),
+                      label: const Text('⚡ 1-Tap Auto-Load Feline Clinic Catalog', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryTeal, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: () => _openServiceDialog(providerId, providerName),
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add Custom Service'),
+                      style: OutlinedButton.styleFrom(foregroundColor: AppTheme.primaryTealDark, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    ),
+                  ],
+                ),
               ),
             );
           }
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: services.length,
-            itemBuilder: (context, index) {
-              final s = services[index];
-              return FadeInSlide(
-                delay: Duration(milliseconds: 30 * index),
-                child: BouncingScale(
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: AppTheme.surface,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppTheme.borderLight),
-                      boxShadow: AppTheme.cardShadow,
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _handleAutoSeedServices(providerId, providerName),
+                    icon: const Icon(Icons.bolt_rounded, size: 17, color: AppTheme.primaryTealDark),
+                    label: const Text(
+                      '⚡ 1-Tap Auto-Load Standard Feline Services Catalog',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: AppTheme.primaryTealDark),
                     ),
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: AppTheme.primaryTealLight,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                s.category.toUpperCase(),
-                                style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: AppTheme.primaryTealDark),
-                              ),
-                            ),
-                            const Spacer(),
-                            IconButton(
-                              icon: const Icon(Icons.edit, size: 18, color: AppTheme.textSecondary),
-                              onPressed: () => _openServiceDialog(providerId, providerName, existing: s),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.delete, size: 18, color: Colors.red),
-                              onPressed: () => _confirmDeleteService(s.id),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(s.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-                        if (s.description.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text(s.description, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                        ],
-                        const SizedBox(height: 12),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text('${s.durationMinutes} mins', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-                            Text('\$${s.price.toStringAsFixed(2)}', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.primaryTealDark)),
-                          ],
-                        ),
-                      ],
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: AppTheme.primaryTeal.withValues(alpha: 0.45)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                   ),
                 ),
-              );
-            },
+              ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: services.length,
+                  itemBuilder: (context, index) {
+                    final s = services[index];
+                    return FadeInSlide(
+                      delay: Duration(milliseconds: 30 * index),
+                      child: BouncingScale(
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: AppTheme.surface,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: AppTheme.borderLight),
+                            boxShadow: AppTheme.cardShadow,
+                          ),
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primaryTealLight,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      s.category.toUpperCase(),
+                                      style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: AppTheme.primaryTealDark),
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  IconButton(
+                                    icon: const Icon(Icons.edit, size: 18, color: AppTheme.textSecondary),
+                                    onPressed: () => _openServiceDialog(providerId, providerName, existing: s),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete, size: 18, color: Colors.red),
+                                    onPressed: () => _confirmDeleteService(s.id),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(s.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+                              if (s.description.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(s.description, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                              ],
+                              const SizedBox(height: 12),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text('${s.durationMinutes} mins', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                                  Text('₱${s.price.toStringAsFixed(0)}', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.primaryTealDark)),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
           );
         },
       ),
@@ -1832,6 +2249,36 @@ class _ProviderHomeScreenState extends State<ProviderHomeScreen> {
         child: const Icon(Icons.add, color: Colors.white),
       ),
     );
+  }
+
+  Future<void> _handleAutoSeedServices(String providerId, String providerName) async {
+    try {
+      final count = await _auth.autoSeedStandardClinicServices(
+        providerId: providerId,
+        providerName: providerName,
+      );
+      if (!mounted) return;
+      if (count > 0) {
+        await showPurrSyncSuccessOverlay(
+          context,
+          title: 'Loaded $count Feline Services!',
+          subtitle: 'Standard veterinary catalog & PHP pricing added automatically.',
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('All standard feline veterinary services are already in your catalog!'),
+            backgroundColor: AppTheme.primaryTeal,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   void _openServiceDialog(String providerId, String providerName, {ServiceOffering? existing}) {
@@ -2575,6 +3022,10 @@ class _UnifiedAppointmentItem {
   bool get isEmergency => isReservation
       ? reservation!.visitType.toLowerCase().contains('emergency')
       : booking!.serviceName.toLowerCase().contains('emergency');
+
+  bool get isCheckedIn => isReservation
+      ? reservation!.checkedInAt != null
+      : booking!.checkedInAt != null;
 
   _UnifiedAppointmentItem.fromReservation(this.reservation, this.effectiveStatus)
       : booking = null,

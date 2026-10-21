@@ -1334,9 +1334,215 @@ class FirebaseService {
 
   // ============ AUTOMATED CLINICAL EMR & QR CHECK-IN ============
 
+  /// Fetches a single Cat document by ID (for Vet Smart EMR baseline lookup).
+  Future<Cat?> getCatById(String catId) async {
+    try {
+      final doc = await _firestore.collection('cats').doc(catId).get();
+      if (!doc.exists || doc.data() == null) return null;
+      return Cat.fromMap(doc.id, doc.data()!);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Automatically processes all pending Reservations and Bookings for a clinic/vet:
+  /// - Checks for time slot conflicts (`isProviderSlotOccupied`)
+  /// - Automatically accepts non-conflicting slots (and all Emergency Triage requests)
+  /// - Automatically assigns sequential Queue Numbers (`Q-01`, `Q-02`, ...)
+  Future<Map<String, int>> autoProcessPendingAppointments({
+    required String providerId,
+    required String providerName,
+  }) async {
+    int acceptedCount = 0;
+    int conflictCount = 0;
+    try {
+      final resSnap = await _firestore
+          .collection('reservations')
+          .where('vetId', isEqualTo: providerId)
+          .get();
+      final bookSnap = await _firestore
+          .collection('bookings')
+          .where('clinicId', isEqualTo: providerId)
+          .get();
+
+      final now = DateTime.now();
+      int seq = 1;
+
+      for (final doc in resSnap.docs) {
+        final r = Reservation.fromMap(doc.id, doc.data());
+        if (r.status != RequestStatus.pending) continue;
+        final isEmergency = r.visitType.toLowerCase().contains('emergency');
+        if (!isEmergency && r.requestedAt.isBefore(now)) continue;
+
+        final occupied = isEmergency
+            ? false
+            : await isProviderSlotOccupied(
+                providerId,
+                r.requestedAt,
+                30,
+                excludeId: r.id,
+              );
+
+        if (occupied) {
+          conflictCount++;
+          continue;
+        }
+
+        final catInitial = r.catName.isNotEmpty ? r.catName[0].toUpperCase() : 'C';
+        final queueNum = isEmergency
+            ? 'Q-00-EMG'
+            : 'Q-${seq.toString().padLeft(2, '0')}-$catInitial';
+        seq++;
+
+        await _firestore.collection('reservations').doc(r.id).update({
+          'status': RequestStatus.accepted.toValue(),
+          'queueNumber': queueNum,
+          'providerNote': isEmergency
+              ? '🚨 Auto-Accepted Priority Emergency Triage ($queueNum). Proceed immediately.'
+              : '⚡ Auto-Confirmed by $providerName Smart Queue ($queueNum).',
+          'updatedAt': Timestamp.now(),
+        });
+        acceptedCount++;
+      }
+
+      for (final doc in bookSnap.docs) {
+        final b = Booking.fromMap(doc.id, doc.data());
+        if (b.status != RequestStatus.pending) continue;
+        final isEmergency = b.serviceName.toLowerCase().contains('emergency');
+        if (!isEmergency && b.scheduledAt.isBefore(now)) continue;
+
+        final occupied = isEmergency
+            ? false
+            : await isProviderSlotOccupied(
+                providerId,
+                b.scheduledAt,
+                b.serviceDurationMinutes,
+                excludeId: b.id,
+              );
+
+        if (occupied) {
+          conflictCount++;
+          continue;
+        }
+
+        final catInitial = b.catName.isNotEmpty ? b.catName[0].toUpperCase() : 'C';
+        final queueNum = isEmergency
+            ? 'Q-00-EMG'
+            : 'Q-${seq.toString().padLeft(2, '0')}-$catInitial';
+        seq++;
+
+        await _firestore.collection('bookings').doc(b.id).update({
+          'status': RequestStatus.accepted.toValue(),
+          'queueNumber': queueNum,
+          'providerNote': '⚡ Auto-Confirmed by $providerName Smart Queue ($queueNum).',
+          'updatedAt': Timestamp.now(),
+        });
+        acceptedCount++;
+      }
+
+      return {
+        'acceptedCount': acceptedCount,
+        'conflictCount': conflictCount,
+      };
+    } catch (e) {
+      throw AppException('Auto-queue processing failed: $e');
+    }
+  }
+
+  /// Automatically populates a complete standard feline veterinary service catalog
+  /// for a clinic/vet in 1 tap (skipping any service names that already exist).
+  Future<int> autoSeedStandardClinicServices({
+    required String providerId,
+    required String providerName,
+  }) async {
+    final existingSnap = await _firestore
+        .collection('services')
+        .where('providerId', isEqualTo: providerId)
+        .get();
+    final existingNames = existingSnap.docs
+        .map((d) => (d.data()['name'] ?? '').toString().trim().toLowerCase())
+        .toSet();
+
+    final standardCatalog = <Map<String, dynamic>>[
+      {
+        'name': 'Comprehensive Feline Wellness Check-Up',
+        'category': 'Consultation',
+        'price': 550.0,
+        'durationMinutes': 30,
+        'description': 'Full nose-to-tail physical exam, weight & temperature check, cardiopulmonary auscultation, and nutritional consult.',
+      },
+      {
+        'name': '4-in-1 Core Feline Vaccine (FVRCP)',
+        'category': 'Vaccination',
+        'price': 850.0,
+        'durationMinutes': 20,
+        'description': 'Core protection against Feline Viral Rhinotracheitis, Calicivirus, Panleukopenia, and Chlamydia with auto-booster tracking.',
+      },
+      {
+        'name': 'Anti-Rabies Core Vaccine & Deworming',
+        'category': 'Vaccination',
+        'price': 450.0,
+        'durationMinutes': 20,
+        'description': 'Rabies immunization plus weight-calibrated broad-spectrum feline oral deworming.',
+      },
+      {
+        'name': 'Feline Kapon (Spay / Neuter Surgery Package)',
+        'category': 'Surgery',
+        'price': 1800.0,
+        'durationMinutes': 60,
+        'description': 'Sterile surgical sterilization with pre-anesthetic vitals check, post-op pain relief (Meloxicam), and long-acting antibiotic.',
+      },
+      {
+        'name': 'CBC Blood Chemistry & FIV/FeLV Snap Test',
+        'category': 'Consultation',
+        'price': 1450.0,
+        'durationMinutes': 30,
+        'description': 'In-house automated Hematology CBC panel and rapid Feline Immunodeficiency / Leukemia virus screening.',
+      },
+      {
+        'name': 'Ultrasonic Feline Dental Scaling & Polishing',
+        'category': 'Dental',
+        'price': 2200.0,
+        'durationMinutes': 60,
+        'description': 'Tartar removal, gingival pocket cleaning, and oral antiseptic flush under monitored sedation.',
+      },
+      {
+        'name': 'Medicated Feline Spa, Anti-Flea Bath & Sanitary Trim',
+        'category': 'Grooming',
+        'price': 650.0,
+        'durationMinutes': 45,
+        'description': 'Cat-safe warm hydro-bath, ear cleaning, nail clipping, paw pad trim, and blow-dry.',
+      },
+    ];
+
+    int addedCount = 0;
+    final now = DateTime.now();
+    for (final item in standardCatalog) {
+      final name = item['name'] as String;
+      if (existingNames.contains(name.toLowerCase())) continue;
+      final srv = ServiceOffering(
+        id: '',
+        providerId: providerId,
+        providerName: providerName,
+        name: name,
+        description: item['description'] as String,
+        category: item['category'] as String,
+        price: item['price'] as double,
+        durationMinutes: item['durationMinutes'] as int,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      );
+      await addService(srv);
+      addedCount++;
+    }
+    return addedCount;
+  }
+
   /// Completes a consultation or clinic service booking, and automatically synchronizes
   /// the diagnosis into the Cat's medical history (VetVisit), records the newly measured weight (WeightLog),
-  /// schedules/adds the administered vaccine (VaccineRecord), and updates gender to Neutered/Spayed if surgery was performed.
+  /// schedules/adds the administered vaccine (VaccineRecord), updates gender to Neutered/Spayed if surgery was performed,
+  /// and automatically creates a confirmed Follow-Up Reservation if `followUpDate` is set.
   Future<void> completeAppointmentWithClinicalEMR({
     required String appointmentId,
     required bool isBooking,
@@ -1344,106 +1550,335 @@ class FirebaseService {
     required String ownerId,
     required String clinicName,
     required String diagnosisNotes,
+    String? catName,
+    String? ownerName,
+    String? catBreed,
     double? recordedWeightKg,
+    double? temperatureCelsius,
     String? vaccineTypeGiven,
     bool isKaponPerformed = false,
     String? prescribedMedicine,
     DateTime? followUpDate,
+    double? totalBillPhp,
   }) async {
     try {
       final now = DateTime.now();
+      final currentUser = _auth.currentUser;
+      final providerId = currentUser?.uid ?? '';
 
-      // 1. Mark Appointment Completed with the provider note
-      if (isBooking) {
-        await respondToBooking(appointmentId, RequestStatus.completed, providerNote: diagnosisNotes);
-      } else {
-        await respondToReservation(appointmentId, RequestStatus.completed, providerNote: diagnosisNotes);
-      }
-
-      // 2. Automatically log VetVisit to Cat's permanent medical history
       final visitReason = isKaponPerformed
           ? 'Spay / Neuter Surgery (Kapon)'
           : ((vaccineTypeGiven != null && vaccineTypeGiven.isNotEmpty && vaccineTypeGiven != 'None')
               ? 'Vaccination ($vaccineTypeGiven)'
               : 'Clinical Consultation');
 
-      final visitDoc = _firestore.collection('vet_visits').doc();
-      final visit = VetVisit(
-        id: visitDoc.id,
-        catId: catId,
-        visitDate: now,
-        clinicName: clinicName,
-        reason: visitReason,
-        diagnosis: diagnosisNotes,
-        prescribedMedicine: prescribedMedicine,
-        followUpDate: followUpDate,
-      );
-      final visitMap = visit.toMap()..['userId'] = ownerId;
-      await visitDoc.set(visitMap);
-
-      // 3. Automatically log newly measured Weight (WeightLog) & update Cat's current weight
+      // Build rich clinical summary note for the appointment & receipt
+      final summaryParts = <String>[diagnosisNotes.trim()];
+      if (temperatureCelsius != null && temperatureCelsius > 0) {
+        summaryParts.add('Temp: ${temperatureCelsius.toStringAsFixed(1)}°C');
+      }
       if (recordedWeightKg != null && recordedWeightKg > 0) {
-        final weightDoc = _firestore.collection('weight_logs').doc();
-        final wLog = WeightLog(
-          id: weightDoc.id,
-          catId: catId,
-          weight: recordedWeightKg,
-          date: now,
-          notes: 'Clinically recorded at $clinicName',
-        );
-        final wMap = wLog.toMap()..['userId'] = ownerId;
-        await weightDoc.set(wMap);
+        summaryParts.add('Weight: ${recordedWeightKg.toStringAsFixed(2)} kg');
+      }
+      if (vaccineTypeGiven != null && vaccineTypeGiven.isNotEmpty && vaccineTypeGiven != 'None') {
+        summaryParts.add('Vaccine: $vaccineTypeGiven');
+      }
+      if (isKaponPerformed) {
+        summaryParts.add('Procedure: Kapon (Spay/Neuter)');
+      }
+      if (prescribedMedicine != null && prescribedMedicine.trim().isNotEmpty) {
+        summaryParts.add('Rx: ${prescribedMedicine.trim()}');
+      }
+      if (followUpDate != null) {
+        summaryParts.add('Auto-Follow-Up: ${ followUpDate.toLocal().toString().split(' ')[0] }');
+      }
+      if (totalBillPhp != null && totalBillPhp > 0) {
+        summaryParts.add('Total Bill: ₱${totalBillPhp.toStringAsFixed(0)}');
+      }
+      final richSummaryNote = summaryParts.join(' • ');
 
-        await _firestore.collection('cats').doc(catId).update({
-          'weight': recordedWeightKg,
+      final emrPayload = <String, dynamic>{
+        'catId': catId,
+        'ownerId': ownerId,
+        'clinicName': clinicName,
+        'visitReason': visitReason,
+        'diagnosisNotes': diagnosisNotes.trim(),
+        'recordedWeightKg': recordedWeightKg,
+        'temperatureCelsius': temperatureCelsius,
+        'vaccineTypeGiven': (vaccineTypeGiven == 'None') ? null : vaccineTypeGiven,
+        'isKaponPerformed': isKaponPerformed,
+        'prescribedMedicine': prescribedMedicine?.trim(),
+        'followUpDate': followUpDate != null ? Timestamp.fromDate(followUpDate) : null,
+        'totalBillPhp': totalBillPhp,
+        'completedAt': Timestamp.fromDate(now),
+      };
+
+      // 1. Mark Appointment Completed with the provider note + embedded clinicalEmrPayload
+      if (isBooking) {
+        await _firestore.collection('bookings').doc(appointmentId).update({
+          'status': RequestStatus.completed.toValue(),
+          'providerNote': richSummaryNote,
+          'clinicalEmrPayload': emrPayload,
+          'updatedAt': Timestamp.now(),
+        });
+      } else {
+        await _firestore.collection('reservations').doc(appointmentId).update({
+          'status': RequestStatus.completed.toValue(),
+          'providerNote': richSummaryNote,
+          'clinicalEmrPayload': emrPayload,
           'updatedAt': Timestamp.now(),
         });
       }
 
+      // 2. Automatically log VetVisit to Cat's permanent medical history (deterministic ID avoids duplicates)
+      try {
+        final visitDoc = _firestore.collection('vet_visits').doc('emr_$appointmentId');
+        final visit = VetVisit(
+          id: visitDoc.id,
+          catId: catId,
+          visitDate: now,
+          clinicName: clinicName,
+          reason: visitReason,
+          diagnosis: richSummaryNote,
+          prescribedMedicine: prescribedMedicine,
+          followUpDate: followUpDate,
+        );
+        final visitMap = visit.toMap()..['userId'] = ownerId;
+        await visitDoc.set(visitMap);
+      } catch (_) {}
+
+      // 3. Automatically log newly measured Weight (WeightLog) & update Cat's current weight
+      if (recordedWeightKg != null && recordedWeightKg > 0) {
+        try {
+          final weightDoc = _firestore.collection('weight_logs').doc('emr_w_$appointmentId');
+          final wLog = WeightLog(
+            id: weightDoc.id,
+            catId: catId,
+            weight: recordedWeightKg,
+            date: now,
+            notes: 'Clinically recorded at $clinicName',
+          );
+          final wMap = wLog.toMap()..['userId'] = ownerId;
+          await weightDoc.set(wMap);
+        } catch (_) {}
+
+        try {
+          await _firestore.collection('cats').doc(catId).update({
+            'weight': recordedWeightKg,
+            'updatedAt': Timestamp.now(),
+          });
+        } catch (_) {}
+      }
+
       // 4. Automatically log administered vaccine (VaccineRecord) & compute next due date
       if (vaccineTypeGiven != null && vaccineTypeGiven.isNotEmpty && vaccineTypeGiven != 'None') {
-        final nextDue = VaccineRecord.calculateNextDue(vaccineTypeGiven, now);
-        final vaxDoc = _firestore.collection('vaccines').doc();
-        final vax = VaccineRecord(
-          id: vaxDoc.id,
-          catId: catId,
-          type: vaccineTypeGiven,
-          dateGiven: now,
-          nextDueDate: nextDue,
-          clinicName: clinicName,
-          notes: 'Administered at $clinicName',
-        );
-        final vaxMap = vax.toMap()..['userId'] = ownerId;
-        await vaxDoc.set(vaxMap);
+        try {
+          final nextDue = VaccineRecord.calculateNextDue(vaccineTypeGiven, now);
+          final vaxDoc = _firestore.collection('vaccines').doc('emr_vax_$appointmentId');
+          final vax = VaccineRecord(
+            id: vaxDoc.id,
+            catId: catId,
+            type: vaccineTypeGiven,
+            dateGiven: now,
+            nextDueDate: nextDue,
+            clinicName: clinicName,
+            notes: 'Administered at $clinicName',
+          );
+          final vaxMap = vax.toMap()..['userId'] = ownerId;
+          await vaxDoc.set(vaxMap);
+        } catch (_) {}
       }
 
       // 5. Automatically update Cat's gender to Neutered/Spayed if Kapon was performed
       if (isKaponPerformed) {
-        final catSnap = await _firestore.collection('cats').doc(catId).get();
-        if (catSnap.exists && catSnap.data() != null) {
-          final currentGender = (catSnap.data()!['gender'] ?? '').toString().toLowerCase();
-          final newGender = currentGender.contains('female') ? 'Spayed' : 'Neutered';
-          await _firestore.collection('cats').doc(catId).update({
-            'gender': newGender,
-            'updatedAt': Timestamp.now(),
-          });
-        }
+        try {
+          final catSnap = await _firestore.collection('cats').doc(catId).get();
+          if (catSnap.exists && catSnap.data() != null) {
+            final currentGender = (catSnap.data()!['gender'] ?? '').toString().toLowerCase();
+            final newGender = currentGender.contains('female') ? 'Spayed' : 'Neutered';
+            await _firestore.collection('cats').doc(catId).update({
+              'gender': newGender,
+              'updatedAt': Timestamp.now(),
+            });
+          }
+        } catch (_) {}
       }
 
       // 6. If medicine was prescribed, save active prescription on the cat doc
       if (prescribedMedicine != null && prescribedMedicine.trim().isNotEmpty) {
-        await _firestore.collection('cats').doc(catId).update({
-          'activePrescription': {
-            'medicine': prescribedMedicine.trim(),
-            'prescribedAt': Timestamp.now(),
-            'prescribedBy': clinicName,
-          },
-        });
+        try {
+          await _firestore.collection('cats').doc(catId).update({
+            'activePrescription': {
+              'medicine': prescribedMedicine.trim(),
+              'prescribedAt': Timestamp.now(),
+              'prescribedBy': clinicName,
+            },
+          });
+        } catch (_) {}
+      }
+
+      // 7. AUTOMATED FOLLOW-UP APPOINTMENT SCHEDULING:
+      // If a followUpDate is set, automatically create an Accepted Follow-Up Reservation at 10:00 AM!
+      if (followUpDate != null && providerId.isNotEmpty) {
+        try {
+          final followUpSlot = DateTime(
+            followUpDate.year,
+            followUpDate.month,
+            followUpDate.day,
+            10,
+            0,
+          );
+          final followUpDoc = _firestore.collection('reservations').doc('followup_$appointmentId');
+          final followUpReason = isKaponPerformed
+              ? 'Post-Op Kapon Suture & Healing Check'
+              : ((vaccineTypeGiven != null && vaccineTypeGiven != 'None')
+                  ? 'Booster / Post-Vaccination Follow-Up ($vaccineTypeGiven)'
+                  : 'Clinical Follow-Up Consultation');
+          final queueNum = 'Q-FUP-${(catName ?? 'C').isNotEmpty ? (catName ?? 'C')[0].toUpperCase() : 'C'}';
+          final followUpRes = Reservation(
+            id: followUpDoc.id,
+            ownerId: ownerId,
+            ownerName: ownerName ?? 'Pet Owner',
+            catId: catId,
+            catName: catName ?? 'Patient Cat',
+            catBreed: catBreed ?? 'Feline',
+            vetId: providerId,
+            vetName: clinicName,
+            visitType: 'Follow-up',
+            requestedAt: followUpSlot,
+            notes: '⚡ Auto-Scheduled Follow-Up from visit on ${now.toLocal().toString().split(' ')[0]}: $followUpReason',
+            status: RequestStatus.accepted,
+            providerNote: '⚡ Automatically scheduled by $clinicName during EMR discharge ($queueNum).',
+            queueNumber: queueNum,
+            createdAt: now,
+            updatedAt: now,
+          );
+          await followUpDoc.set(followUpRes.toMap());
+        } catch (_) {}
       }
     } on FirebaseException catch (e) {
       throw AppException('Error saving clinical records (${e.code}): ${e.message}');
     } catch (e) {
       throw AppException('Failed to complete visit: $e');
+    }
+  }
+
+  /// Ensures that any completed appointment containing `clinicalEmrPayload` is 100% synced
+  /// to the Pet Owner's `vet_visits`, `weight_logs`, `vaccines`, and `cats` documents
+  /// even if strict Firestore security rules prevented cross-account writes during the Vet session.
+  final Set<String> _syncedEmrAppointmentIds = {};
+
+  Future<void> syncCompletedClinicalEMRForOwner({
+    List<Reservation> reservations = const [],
+    List<Booking> bookings = const [],
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    Future<void> processPayload(String apptId, Map<String, dynamic> payload) async {
+      if (_syncedEmrAppointmentIds.contains(apptId)) return;
+      _syncedEmrAppointmentIds.add(apptId);
+
+      final catId = (payload['catId'] ?? '').toString();
+      if (catId.isEmpty) return;
+      final clinicName = (payload['clinicName'] ?? 'Veterinary Clinic').toString();
+      final visitReason = (payload['visitReason'] ?? 'Clinical Consultation').toString();
+      final diagnosisNotes = (payload['diagnosisNotes'] ?? '').toString();
+      final prescribedMedicine = payload['prescribedMedicine']?.toString();
+      final recordedWeightKg = (payload['recordedWeightKg'] is num)
+          ? (payload['recordedWeightKg'] as num).toDouble()
+          : null;
+      final vaccineTypeGiven = payload['vaccineTypeGiven']?.toString();
+      final isKaponPerformed = payload['isKaponPerformed'] == true;
+
+      DateTime completedAt = DateTime.now();
+      if (payload['completedAt'] is Timestamp) {
+        completedAt = (payload['completedAt'] as Timestamp).toDate();
+      }
+      DateTime? followUpDate;
+      if (payload['followUpDate'] is Timestamp) {
+        followUpDate = (payload['followUpDate'] as Timestamp).toDate();
+      }
+
+      try {
+        final visitRef = _firestore.collection('vet_visits').doc('emr_$apptId');
+        final visitSnap = await visitRef.get();
+        if (!visitSnap.exists) {
+          final visit = VetVisit(
+            id: visitRef.id,
+            catId: catId,
+            visitDate: completedAt,
+            clinicName: clinicName,
+            reason: visitReason,
+            diagnosis: diagnosisNotes,
+            prescribedMedicine: prescribedMedicine,
+            followUpDate: followUpDate,
+          );
+          await visitRef.set(visit.toMap()..['userId'] = user.uid);
+        }
+
+        if (recordedWeightKg != null && recordedWeightKg > 0) {
+          final wRef = _firestore.collection('weight_logs').doc('emr_w_$apptId');
+          final wSnap = await wRef.get();
+          if (!wSnap.exists) {
+            final wLog = WeightLog(
+              id: wRef.id,
+              catId: catId,
+              weight: recordedWeightKg,
+              date: completedAt,
+              notes: 'Clinically recorded at $clinicName',
+            );
+            await wRef.set(wLog.toMap()..['userId'] = user.uid);
+            await _firestore.collection('cats').doc(catId).update({
+              'weight': recordedWeightKg,
+              'updatedAt': Timestamp.now(),
+            });
+          }
+        }
+
+        if (vaccineTypeGiven != null && vaccineTypeGiven.isNotEmpty && vaccineTypeGiven != 'None') {
+          final vaxRef = _firestore.collection('vaccines').doc('emr_vax_$apptId');
+          final vaxSnap = await vaxRef.get();
+          if (!vaxSnap.exists) {
+            final nextDue = VaccineRecord.calculateNextDue(vaccineTypeGiven, completedAt);
+            final vax = VaccineRecord(
+              id: vaxRef.id,
+              catId: catId,
+              type: vaccineTypeGiven,
+              dateGiven: completedAt,
+              nextDueDate: nextDue,
+              clinicName: clinicName,
+              notes: 'Administered at $clinicName',
+            );
+            await vaxRef.set(vax.toMap()..['userId'] = user.uid);
+          }
+        }
+
+        if (isKaponPerformed) {
+          final catSnap = await _firestore.collection('cats').doc(catId).get();
+          if (catSnap.exists && catSnap.data() != null) {
+            final currentGender = (catSnap.data()!['gender'] ?? '').toString().toLowerCase();
+            if (!currentGender.contains('spayed') && !currentGender.contains('neutered')) {
+              final newGender = currentGender.contains('female') ? 'Spayed' : 'Neutered';
+              await _firestore.collection('cats').doc(catId).update({
+                'gender': newGender,
+                'updatedAt': Timestamp.now(),
+              });
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    for (final r in reservations) {
+      if (r.status == RequestStatus.completed && r.clinicalEmrPayload != null) {
+        await processPayload(r.id, r.clinicalEmrPayload!);
+      }
+    }
+    for (final b in bookings) {
+      if (b.status == RequestStatus.completed && b.clinicalEmrPayload != null) {
+        await processPayload(b.id, b.clinicalEmrPayload!);
+      }
     }
   }
 
@@ -1456,11 +1891,13 @@ class FirebaseService {
     required String providerName,
   }) async {
     try {
-      final catDoc = await _firestore.collection('cats').doc(catId).get();
-      if (!catDoc.exists || catDoc.data() == null) {
-        throw AppException('Cat profile not found for this QR code.');
-      }
-      final cat = Cat.fromMap(catDoc.id, catDoc.data()!);
+      Cat? cat;
+      try {
+        final catDoc = await _firestore.collection('cats').doc(catId).get();
+        if (catDoc.exists && catDoc.data() != null) {
+          cat = Cat.fromMap(catDoc.id, catDoc.data()!);
+        }
+      } catch (_) {}
 
       // Look for any pending or accepted reservation for this cat with this provider
       final resDocs = await _firestore
@@ -1495,6 +1932,32 @@ class FirebaseService {
         }
       }
 
+      if (cat == null && matchedReservation != null) {
+        cat = Cat(
+          id: matchedReservation.catId,
+          userId: matchedReservation.ownerId,
+          name: matchedReservation.catName,
+          breed: matchedReservation.catBreed,
+          birthDate: DateTime.now().subtract(const Duration(days: 365)),
+          weight: 4.0,
+          gender: 'Unspecified',
+        );
+      } else if (cat == null && matchedBooking != null) {
+        cat = Cat(
+          id: matchedBooking.catId,
+          userId: matchedBooking.ownerId,
+          name: matchedBooking.catName,
+          breed: matchedBooking.catBreed,
+          birthDate: DateTime.now().subtract(const Duration(days: 365)),
+          weight: 4.0,
+          gender: 'Unspecified',
+        );
+      }
+
+      if (cat == null) {
+        throw AppException('Cat profile or active appointment not found for ID "$catId".');
+      }
+
       final queueNum = 'Q-${(DateTime.now().minute % 50 + 1).toString().padLeft(2, '0')}-${cat.name.isNotEmpty ? cat.name[0].toUpperCase() : 'X'}';
 
       if (matchedReservation != null) {
@@ -1502,6 +1965,7 @@ class FirebaseService {
           'status': RequestStatus.accepted.toValue(),
           'checkedInAt': Timestamp.now(),
           'queueNumber': queueNum,
+          'providerNote': '🟢 Checked-In at Clinic Reception via QR ($queueNum).',
           'updatedAt': Timestamp.now(),
         });
       } else if (matchedBooking != null) {
@@ -1509,8 +1973,36 @@ class FirebaseService {
           'status': RequestStatus.accepted.toValue(),
           'checkedInAt': Timestamp.now(),
           'queueNumber': queueNum,
+          'providerNote': '🟢 Checked-In at Clinic Reception via QR ($queueNum).',
           'updatedAt': Timestamp.now(),
         });
+      } else {
+        // Walk-in QR scan: attempt to auto-create a live Walk-In Reservation in the queue
+        try {
+          final now = DateTime.now();
+          final walkInDoc = _firestore.collection('reservations').doc();
+          final walkInRes = Reservation(
+            id: walkInDoc.id,
+            ownerId: cat.userId,
+            ownerName: 'Walk-In Pet Owner',
+            catId: cat.id,
+            catName: cat.name,
+            catBreed: cat.breed,
+            vetId: providerId,
+            vetName: providerName,
+            visitType: 'Checkup',
+            requestedAt: now,
+            notes: '⚡ Auto-Created via Walk-In Reception QR Scan',
+            status: RequestStatus.accepted,
+            providerNote: '🟢 Walk-In Checked-In via QR ($queueNum).',
+            queueNumber: queueNum,
+            checkedInAt: now,
+            createdAt: now,
+            updatedAt: now,
+          );
+          await walkInDoc.set(walkInRes.toMap());
+          matchedReservation = walkInRes;
+        } catch (_) {}
       }
 
       return {

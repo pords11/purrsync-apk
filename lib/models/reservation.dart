@@ -15,6 +15,9 @@ class Reservation {
   final String notes;
   final RequestStatus status;
   final String? providerNote;
+  final String? queueNumber;
+  final DateTime? checkedInAt;
+  final Map<String, dynamic>? clinicalEmrPayload;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -32,6 +35,9 @@ class Reservation {
     this.notes = '',
     this.status = RequestStatus.pending,
     this.providerNote,
+    this.queueNumber,
+    this.checkedInAt,
+    this.clinicalEmrPayload,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -50,6 +56,9 @@ class Reservation {
       'notes': notes,
       'status': status.toValue(),
       'providerNote': providerNote,
+      if (queueNumber != null) 'queueNumber': queueNumber,
+      if (checkedInAt != null) 'checkedInAt': Timestamp.fromDate(checkedInAt!),
+      if (clinicalEmrPayload != null) 'clinicalEmrPayload': clinicalEmrPayload,
       'createdAt': Timestamp.fromDate(createdAt),
       'updatedAt': Timestamp.fromDate(updatedAt),
     };
@@ -60,6 +69,12 @@ class Reservation {
       if (val is Timestamp) return val.toDate();
       if (val is DateTime) return val;
       return DateTime.now();
+    }
+
+    DateTime? parseOptionalDate(dynamic val) {
+      if (val is Timestamp) return val.toDate();
+      if (val is DateTime) return val;
+      return null;
     }
 
     return Reservation(
@@ -76,6 +91,11 @@ class Reservation {
       notes: (map['notes'] ?? '').toString(),
       status: RequestStatus.fromString(map['status'] as String?),
       providerNote: map['providerNote'] as String?,
+      queueNumber: map['queueNumber']?.toString(),
+      checkedInAt: parseOptionalDate(map['checkedInAt']),
+      clinicalEmrPayload: map['clinicalEmrPayload'] is Map
+          ? Map<String, dynamic>.from(map['clinicalEmrPayload'] as Map)
+          : null,
       createdAt: parseDate(map['createdAt']),
       updatedAt: parseDate(map['updatedAt']),
     );
