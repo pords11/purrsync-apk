@@ -1331,4 +1331,200 @@ class FirebaseService {
       return list;
     });
   }
+
+  // ============ AUTOMATED CLINICAL EMR & QR CHECK-IN ============
+
+  /// Completes a consultation or clinic service booking, and automatically synchronizes
+  /// the diagnosis into the Cat's medical history (VetVisit), records the newly measured weight (WeightLog),
+  /// schedules/adds the administered vaccine (VaccineRecord), and updates gender to Neutered/Spayed if surgery was performed.
+  Future<void> completeAppointmentWithClinicalEMR({
+    required String appointmentId,
+    required bool isBooking,
+    required String catId,
+    required String ownerId,
+    required String clinicName,
+    required String diagnosisNotes,
+    double? recordedWeightKg,
+    String? vaccineTypeGiven,
+    bool isKaponPerformed = false,
+    String? prescribedMedicine,
+    DateTime? followUpDate,
+  }) async {
+    try {
+      final now = DateTime.now();
+
+      // 1. Mark Appointment Completed with the provider note
+      if (isBooking) {
+        await respondToBooking(appointmentId, RequestStatus.completed, providerNote: diagnosisNotes);
+      } else {
+        await respondToReservation(appointmentId, RequestStatus.completed, providerNote: diagnosisNotes);
+      }
+
+      // 2. Automatically log VetVisit to Cat's permanent medical history
+      final visitReason = isKaponPerformed
+          ? 'Spay / Neuter Surgery (Kapon)'
+          : ((vaccineTypeGiven != null && vaccineTypeGiven.isNotEmpty && vaccineTypeGiven != 'None')
+              ? 'Vaccination ($vaccineTypeGiven)'
+              : 'Clinical Consultation');
+
+      final visitDoc = _firestore.collection('vet_visits').doc();
+      final visit = VetVisit(
+        id: visitDoc.id,
+        catId: catId,
+        visitDate: now,
+        clinicName: clinicName,
+        reason: visitReason,
+        diagnosis: diagnosisNotes,
+        prescribedMedicine: prescribedMedicine,
+        followUpDate: followUpDate,
+      );
+      final visitMap = visit.toMap()..['userId'] = ownerId;
+      await visitDoc.set(visitMap);
+
+      // 3. Automatically log newly measured Weight (WeightLog) & update Cat's current weight
+      if (recordedWeightKg != null && recordedWeightKg > 0) {
+        final weightDoc = _firestore.collection('weight_logs').doc();
+        final wLog = WeightLog(
+          id: weightDoc.id,
+          catId: catId,
+          weight: recordedWeightKg,
+          date: now,
+          notes: 'Clinically recorded at $clinicName',
+        );
+        final wMap = wLog.toMap()..['userId'] = ownerId;
+        await weightDoc.set(wMap);
+
+        await _firestore.collection('cats').doc(catId).update({
+          'weight': recordedWeightKg,
+          'updatedAt': Timestamp.now(),
+        });
+      }
+
+      // 4. Automatically log administered vaccine (VaccineRecord) & compute next due date
+      if (vaccineTypeGiven != null && vaccineTypeGiven.isNotEmpty && vaccineTypeGiven != 'None') {
+        final nextDue = VaccineRecord.calculateNextDue(vaccineTypeGiven, now);
+        final vaxDoc = _firestore.collection('vaccines').doc();
+        final vax = VaccineRecord(
+          id: vaxDoc.id,
+          catId: catId,
+          type: vaccineTypeGiven,
+          dateGiven: now,
+          nextDueDate: nextDue,
+          clinicName: clinicName,
+          notes: 'Administered at $clinicName',
+        );
+        final vaxMap = vax.toMap()..['userId'] = ownerId;
+        await vaxDoc.set(vaxMap);
+      }
+
+      // 5. Automatically update Cat's gender to Neutered/Spayed if Kapon was performed
+      if (isKaponPerformed) {
+        final catSnap = await _firestore.collection('cats').doc(catId).get();
+        if (catSnap.exists && catSnap.data() != null) {
+          final currentGender = (catSnap.data()!['gender'] ?? '').toString().toLowerCase();
+          final newGender = currentGender.contains('female') ? 'Spayed' : 'Neutered';
+          await _firestore.collection('cats').doc(catId).update({
+            'gender': newGender,
+            'updatedAt': Timestamp.now(),
+          });
+        }
+      }
+
+      // 6. If medicine was prescribed, save active prescription on the cat doc
+      if (prescribedMedicine != null && prescribedMedicine.trim().isNotEmpty) {
+        await _firestore.collection('cats').doc(catId).update({
+          'activePrescription': {
+            'medicine': prescribedMedicine.trim(),
+            'prescribedAt': Timestamp.now(),
+            'prescribedBy': clinicName,
+          },
+        });
+      }
+    } on FirebaseException catch (e) {
+      throw AppException('Error saving clinical records (${e.code}): ${e.message}');
+    } catch (e) {
+      throw AppException('Failed to complete visit: $e');
+    }
+  }
+
+  /// Automatically matches and checks-in a patient using their scanned QR Code.
+  /// Transitions appointment status to Accepted/Checked-In, assigns an automatic Queue Number,
+  /// and returns the Cat profile and appointment details.
+  Future<Map<String, dynamic>> checkInPatientWithQR({
+    required String catId,
+    required String providerId,
+    required String providerName,
+  }) async {
+    try {
+      final catDoc = await _firestore.collection('cats').doc(catId).get();
+      if (!catDoc.exists || catDoc.data() == null) {
+        throw AppException('Cat profile not found for this QR code.');
+      }
+      final cat = Cat.fromMap(catDoc.id, catDoc.data()!);
+
+      // Look for any pending or accepted reservation for this cat with this provider
+      final resDocs = await _firestore
+          .collection('reservations')
+          .where('vetId', isEqualTo: providerId)
+          .where('catId', isEqualTo: catId)
+          .get();
+
+      Reservation? matchedReservation;
+      for (final doc in resDocs.docs) {
+        final r = Reservation.fromMap(doc.id, doc.data());
+        if (r.status == RequestStatus.pending || r.status == RequestStatus.accepted) {
+          matchedReservation = r;
+          break;
+        }
+      }
+
+      Booking? matchedBooking;
+      if (matchedReservation == null) {
+        final bookDocs = await _firestore
+            .collection('bookings')
+            .where('clinicId', isEqualTo: providerId)
+            .where('catId', isEqualTo: catId)
+            .get();
+
+        for (final doc in bookDocs.docs) {
+          final b = Booking.fromMap(doc.id, doc.data());
+          if (b.status == RequestStatus.pending || b.status == RequestStatus.accepted) {
+            matchedBooking = b;
+            break;
+          }
+        }
+      }
+
+      final queueNum = 'Q-${(DateTime.now().minute % 50 + 1).toString().padLeft(2, '0')}-${cat.name.isNotEmpty ? cat.name[0].toUpperCase() : 'X'}';
+
+      if (matchedReservation != null) {
+        await _firestore.collection('reservations').doc(matchedReservation.id).update({
+          'status': RequestStatus.accepted.toValue(),
+          'checkedInAt': Timestamp.now(),
+          'queueNumber': queueNum,
+          'updatedAt': Timestamp.now(),
+        });
+      } else if (matchedBooking != null) {
+        await _firestore.collection('bookings').doc(matchedBooking.id).update({
+          'status': RequestStatus.accepted.toValue(),
+          'checkedInAt': Timestamp.now(),
+          'queueNumber': queueNum,
+          'updatedAt': Timestamp.now(),
+        });
+      }
+
+      return {
+        'cat': cat,
+        'queueNumber': queueNum,
+        'hasAppointment': matchedReservation != null || matchedBooking != null,
+        'reservation': matchedReservation,
+        'booking': matchedBooking,
+      };
+    } on FirebaseException catch (e) {
+      throw AppException('QR Check-In failed (${e.code}): ${e.message}');
+    } catch (e) {
+      if (e is AppException) rethrow;
+      throw AppException('Check-in error: $e');
+    }
+  }
 }

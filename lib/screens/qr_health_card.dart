@@ -10,13 +10,16 @@ class QRHealthCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final qrData = '''
-Cat: ${cat.name}
-Breed: ${cat.breed.isNotEmpty ? cat.breed : 'Domestic'}
-Gender: ${cat.genderDisplay}
-Weight: ${cat.weight} kg
-Age: ${cat.ageDisplay}
-''';
+    final qrData = jsonEncode({
+      'purrsync': true,
+      'catId': cat.id,
+      'userId': cat.userId,
+      'name': cat.name,
+      'breed': cat.breed,
+      'gender': cat.genderDisplay,
+      'weight': cat.weight,
+      'age': cat.ageDisplay,
+    });
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -72,10 +75,25 @@ Age: ${cat.ageDisplay}
                   ),
                 ),
               ),
-              const SizedBox(height: 20),
-              const Text(
-                'Scan to view cat profile summary',
-                style: TextStyle(fontSize: 14, color: AppTheme.textSecondary),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryTeal.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppTheme.primaryTeal.withValues(alpha: 0.25)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.qr_code_scanner, size: 16, color: AppTheme.primaryTeal),
+                    SizedBox(width: 6),
+                    Text(
+                      'Ready for Clinic Kiosk & Intake Check-In',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primaryTeal),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),

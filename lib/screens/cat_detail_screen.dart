@@ -7,7 +7,9 @@ import '../services/notification_service.dart';
 import '../widgets/weight_chart.dart';
 import '../widgets/boutique_animations.dart';
 import '../screens/qr_health_card.dart';
+import '../screens/owner/smart_triage_screen.dart';
 import '../utils/app_theme.dart';
+import '../utils/feline_protocol_utils.dart';
 
 
 class CatDetailScreen extends StatefulWidget {
@@ -346,6 +348,16 @@ class _CatDetailScreenState extends State<CatDetailScreen> with SingleTickerProv
               ),
             ),
             actions: [
+              IconButton(
+                icon: const Icon(Icons.auto_awesome, color: Colors.amber),
+                tooltip: 'Smart Triage & Auto-Book',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => SmartTriageScreen(initialCat: widget.cat)),
+                  );
+                },
+              ),
               const ThemeModeToggleButton(iconColor: Colors.white),
               IconButton(
                 icon: const Icon(Icons.qr_code, color: Colors.white),
@@ -536,10 +548,35 @@ class _CatDetailScreenState extends State<CatDetailScreen> with SingleTickerProv
         }
         final vaccines = snapshot.data!;
         if (vaccines.isEmpty) {
-          return const BouncyPawEmptyState(
-            title: 'No vaccine records yet',
-            subtitle: 'Tap + to log Anti-Rabies, 4-in-1, Deworming, or custom booster intervals.',
-            badgeIcon: Icons.vaccines_outlined,
+          return Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const BouncyPawEmptyState(
+                    title: 'No vaccine records yet',
+                    subtitle: 'Tap below to automatically generate standard AAFP feline immunization milestones, or tap + to log manually.',
+                    badgeIcon: Icons.vaccines_outlined,
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: _autoGenerateVaccines,
+                    icon: const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
+                    label: const Text(
+                      '⚡ Auto-Generate Core Vaccine Protocol',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primaryTeal,
+                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      elevation: 2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           );
         }
         return ListView.builder(
@@ -709,6 +746,29 @@ class _CatDetailScreenState extends State<CatDetailScreen> with SingleTickerProv
         );
       },
     );
+  }
+
+  Future<void> _autoGenerateVaccines() async {
+    final records = FelineProtocolUtils.generateProtocolForCat(widget.cat);
+    try {
+      for (final v in records) {
+        await _db.addVaccine(v);
+      }
+      if (mounted) {
+        showPurrSyncSuccessOverlay(
+          context,
+          title: 'Protocol Generated!',
+          subtitle: 'Core feline vaccine milestones have been scheduled.',
+        );
+        setState(() {});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error generating protocol: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   void _confirmDeleteVaccine(VaccineRecord record) {
@@ -990,11 +1050,66 @@ class _CatDetailScreenState extends State<CatDetailScreen> with SingleTickerProv
                   badgeIcon: Icons.monitor_weight_outlined,
                 );
               }
+              final anomaly = FelineProtocolUtils.detectWeightAnomaly(logs, widget.cat.weight);
+
               return ListView.builder(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                itemCount: logs.length,
+                itemCount: logs.length + (anomaly.detected ? 1 : 0),
                 itemBuilder: (context, index) {
-                  final log = logs[index];
+                  if (anomaly.detected && index == 0) {
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppTheme.statusDanger.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppTheme.statusDanger, width: 1.5),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.warning_amber_rounded, color: AppTheme.statusDanger, size: 22),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  anomaly.title,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: AppTheme.statusDanger),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            anomaly.recommendation,
+                            style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => SmartTriageScreen(initialCat: widget.cat)),
+                                );
+                              },
+                              icon: const Icon(Icons.flash_on, size: 15, color: Colors.white),
+                              label: const Text('Auto-Match Diagnostic Vet Now', style: TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.statusDanger,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  final logIndex = anomaly.detected ? index - 1 : index;
+                  final log = logs[logIndex];
                   return FadeInSlide(
                     key: ValueKey('weight_${log.id}'),
                     delay: Duration(milliseconds: 35 * index),

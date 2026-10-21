@@ -4,6 +4,7 @@ import '../../models/service_offering.dart';
 import '../../models/user_role.dart';
 import '../../services/firebase_service.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/map_utils.dart';
 import '../../widgets/boutique_animations.dart';
 import 'reservation_form_screen.dart';
 import 'booking_form_screen.dart';
@@ -148,6 +149,24 @@ class _ProviderDetailScreenState extends State<ProviderDetailScreen> {
                   _infoRow(Icons.phone_outlined, 'Phone', p.phone.isNotEmpty ? p.phone : 'Not specified'),
                   const Divider(),
                   _infoRow(Icons.schedule, 'Hours', p.hoursLabel.isNotEmpty ? p.hoursLabel : 'Mon-Sat • 8:00 AM - 6:00 PM'),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => MapUtils.openDirections(
+                        destinationAddress: '${p.address}, ${p.city}',
+                        clinicName: p.displayName,
+                        context: context,
+                      ),
+                      icon: const Icon(Icons.directions, color: Color(0xFF4285F4), size: 18),
+                      label: const Text('Open in Google Maps / Directions', style: TextStyle(color: Color(0xFF4285F4), fontWeight: FontWeight.bold, fontSize: 13)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFF4285F4)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),

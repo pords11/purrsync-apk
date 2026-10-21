@@ -8,6 +8,7 @@ import 'package:purrsync/models/reservation.dart';
 import 'package:purrsync/models/booking.dart';
 import 'package:purrsync/models/announcement.dart';
 import 'package:purrsync/utils/time_utils.dart';
+import 'package:purrsync/utils/feline_protocol_utils.dart';
 
 void main() {
   group('Cat Age Display Tests', () {
@@ -593,6 +594,60 @@ void main() {
 
       expect(activeList.map((r) => r.id).toList(), equals(['r_emergency', 'r_sooner', 'r_later']));
       expect(historyList.map((r) => r.id).toList(), equals(['r_completed']));
+    });
+  });
+
+  group('Automated Clinical & Triage Protocol Tests', () {
+    test('Kitten protocol generates core 3-dose FVRCP and Rabies milestones', () {
+      final kitten = Cat(
+        id: 'k1',
+        userId: 'u1',
+        name: 'Mochi',
+        breed: 'Domestic',
+        weight: 1.2,
+        birthDate: DateTime.now().subtract(const Duration(days: 60)), // 2 months old
+      );
+      final protocol = FelineProtocolUtils.generateProtocolForCat(kitten);
+      expect(protocol.length, equals(3));
+      expect(protocol.any((v) => v.type.contains('FVRCP Core (Dose 1)')), isTrue);
+      expect(protocol.any((v) => v.type.contains('Anti-Rabies')), isTrue);
+    });
+
+    test('Adult protocol generates Annual Booster and Deworming', () {
+      final adultCat = Cat(
+        id: 'a1',
+        userId: 'u1',
+        name: 'Luna',
+        breed: 'Persian',
+        weight: 4.0,
+        birthDate: DateTime.now().subtract(const Duration(days: 800)), // ~2 years old
+      );
+      final protocol = FelineProtocolUtils.generateProtocolForCat(adultCat);
+      expect(protocol.length, equals(3));
+      expect(protocol.any((v) => v.type.contains('Annual Booster')), isTrue);
+      expect(protocol.any((v) => v.type.contains('Deworming')), isTrue);
+    });
+
+    test('Weight Anomaly Detector alerts on acute weight drop > 10%', () {
+      final now = DateTime.now();
+      final logs = [
+        WeightLog(id: 'w1', catId: 'c1', weight: 4.5, date: now.subtract(const Duration(days: 35))),
+        WeightLog(id: 'w2', catId: 'c1', weight: 3.8, date: now.subtract(const Duration(days: 5))), // ~15.5% drop
+      ];
+      final anomaly = FelineProtocolUtils.detectWeightAnomaly(logs, 3.8);
+      expect(anomaly.detected, isTrue);
+      expect(anomaly.percentageChange, lessThan(-10.0));
+      expect(anomaly.isSevere, isTrue);
+    });
+
+    test('Weight Anomaly Detector does not trigger false alarm on normal weight fluctuation', () {
+      final now = DateTime.now();
+      final logs = [
+        WeightLog(id: 'w1', catId: 'c1', weight: 4.5, date: now.subtract(const Duration(days: 30))),
+        WeightLog(id: 'w2', catId: 'c1', weight: 4.4, date: now.subtract(const Duration(days: 2))), // ~2.2% change
+      ];
+      final anomaly = FelineProtocolUtils.detectWeightAnomaly(logs, 4.4);
+      expect(anomaly.detected, isFalse);
     });
   });
 }

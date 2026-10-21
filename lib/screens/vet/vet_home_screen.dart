@@ -9,6 +9,8 @@ import '../../models/announcement.dart';
 import '../../widgets/operating_hours_selector.dart';
 import '../../utils/app_theme.dart';
 import '../../widgets/boutique_animations.dart';
+import '../../widgets/vet_qr_scanner_dialog.dart';
+import '../../widgets/clinical_emr_dialog.dart';
 
 class VetHomeScreen extends StatefulWidget {
   const VetHomeScreen({super.key});
@@ -51,6 +53,19 @@ class _VetHomeScreenState extends State<VetHomeScreen> {
         backgroundColor: AppTheme.vetAccent,
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
+            tooltip: 'Patient QR Intake Check-In',
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (c) => VetQRScannerDialog(
+                  providerId: user.uid,
+                  providerName: user.displayName ?? 'Veterinarian',
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),
             tooltip: 'Log Out',
@@ -669,9 +684,21 @@ class _VetHomeScreenState extends State<VetHomeScreen> {
                 ),
                 const SizedBox(width: 10),
                 ElevatedButton.icon(
-                  onPressed: () => _updateReservationStatus(res.id, RequestStatus.completed),
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (c) => ClinicalEMRDialog(
+                        appointmentId: res.id,
+                        isBooking: false,
+                        catId: res.catId,
+                        catName: res.catName,
+                        ownerId: res.ownerId,
+                        clinicName: _formatVetName(_auth.getCurrentUser()?.displayName ?? 'Veterinarian'),
+                      ),
+                    );
+                  },
                   icon: const Icon(Icons.done_all, size: 16, color: Colors.white),
-                  label: const Text('Mark Completed', style: TextStyle(color: Colors.white, fontSize: 13)),
+                  label: const Text('Complete & EMR', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.vetAccent,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),

@@ -14,6 +14,7 @@ import 'cat_detail_screen.dart';
 import 'add_cat_screen.dart';
 import 'owner/appointments_screen.dart';
 import 'owner/discover_screen.dart';
+import 'owner/smart_triage_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -351,6 +352,57 @@ class _HomeScreenState extends State<HomeScreen> {
                 filled: false,
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(vertical: 13, horizontal: 14),
+              ),
+            ),
+          ),
+        ),
+        // ============ 1-TAP AUTOMATED SMART TRIAGE BANNER ============
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+          child: InkWell(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SmartTriageScreen()),
+              );
+            },
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF1E5E57), Color(0xFF2A6F68)],
+                ),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.primaryTeal.withValues(alpha: 0.25),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.auto_awesome, color: Colors.amber, size: 22),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '⚡ Smart Triage & Instant Auto-Book',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                        ),
+                        Text(
+                          'Evaluates symptoms & auto-matches earliest clinic slot in 1-tap',
+                          style: TextStyle(color: Colors.white70, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.arrow_forward_ios, color: Colors.white70, size: 13),
+                ],
               ),
             ),
           ),

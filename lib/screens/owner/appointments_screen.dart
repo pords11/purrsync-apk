@@ -6,6 +6,7 @@ import '../../models/request_status.dart';
 import '../../services/firebase_service.dart';
 import '../../services/notification_service.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/map_utils.dart';
 import '../../widgets/boutique_animations.dart';
 import 'reservation_form_screen.dart';
 import 'booking_form_screen.dart';
@@ -469,6 +470,32 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> with SingleTick
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                // Open in Google Maps for Accepted Appointments
+                if (effStatus == RequestStatus.accepted) ...[
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final prov = await _db.getProviderProfile(r.vetId);
+                      final addr = (prov != null && prov.address.isNotEmpty)
+                          ? '${prov.address}, ${prov.city}'
+                          : r.vetName;
+                      if (mounted) {
+                        MapUtils.openDirections(
+                          destinationAddress: addr,
+                          clinicName: r.vetName,
+                          context: context,
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.directions, size: 14, color: Colors.white),
+                    label: const Text('Open in Google Maps', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF4285F4),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 // Edit details while pending
                 if (effStatus == RequestStatus.pending) ...[
                   OutlinedButton.icon(
@@ -827,6 +854,32 @@ class _AppointmentsScreenState extends State<AppointmentsScreen> with SingleTick
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                // Open in Google Maps for Accepted Appointments
+                if (effStatus == RequestStatus.accepted) ...[
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final prov = await _db.getProviderProfile(b.clinicId);
+                      final addr = (prov != null && prov.address.isNotEmpty)
+                          ? '${prov.address}, ${prov.city}'
+                          : b.clinicName;
+                      if (mounted) {
+                        MapUtils.openDirections(
+                          destinationAddress: addr,
+                          clinicName: b.clinicName,
+                          context: context,
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.directions, size: 14, color: Colors.white),
+                    label: const Text('Open in Google Maps', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF4285F4),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 // Edit details while pending
                 if (effStatus == RequestStatus.pending) ...[
                   OutlinedButton.icon(

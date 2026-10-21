@@ -5,6 +5,7 @@ import '../../models/user_role.dart';
 import '../../services/firebase_service.dart';
 import '../../services/api_service.dart';
 import '../../utils/app_theme.dart';
+import '../../utils/map_utils.dart';
 import '../../widgets/boutique_animations.dart';
 import 'provider_detail_screen.dart';
 
@@ -345,6 +346,40 @@ class _DiscoverScreenState extends State<DiscoverScreen> with SingleTickerProvid
                                             ),
                                           ),
                                         ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    InkWell(
+                                      onTap: () {
+                                        MapUtils.openDirections(
+                                          destinationAddress: '${p.address}, ${p.city}',
+                                          clinicName: p.displayName,
+                                          context: context,
+                                        );
+                                      },
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF4285F4).withValues(alpha: 0.08),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: const Color(0xFF4285F4).withValues(alpha: 0.25)),
+                                        ),
+                                        child: const Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.directions, size: 13, color: Color(0xFF4285F4)),
+                                            SizedBox(width: 4),
+                                            Text(
+                                              'Directions in Google Maps',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                                color: Color(0xFF4285F4),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ],
